@@ -80,26 +80,36 @@ export const LegalModals: React.FC<LegalModalProps> = ({ type, onClose }) => {
               <section className="space-y-1">
                 <h4 className="font-bold text-white text-sm">1. Information We Collect</h4>
                 <p>
-                  We collect your profile details (name, age, bio, avatar, language), call session logs (duration and coin deductions), and optional reports submitted for platform safety.
+                  We collect your profile details (name, age, bio, avatar, language), contact information (email address and mobile phone number), city location, call session logs, and reports submitted for platform safety.
+                </p>
+              </section>
+
+              <section className="space-y-1 p-3 bg-[#FF69B4]/10 border border-[#FF69B4]/30 rounded-2xl">
+                <h4 className="font-bold text-white text-sm flex items-center gap-1.5">
+                  <Shield className="w-4 h-4 text-[#FF69B4]" />
+                  2. Admin Access for Support Purposes
+                </h4>
+                <p className="text-pink-100 font-medium leading-relaxed">
+                  Authorized platform administrators can access your name, email ID, and mobile number strictly for user support, identity verification, account troubleshooting, billing inquiries, and trust & safety enforcement. Your personal contact details are never shared with other users or sold to third parties.
                 </p>
               </section>
 
               <section className="space-y-1">
-                <h4 className="font-bold text-white text-sm">2. Camera & Microphone Permissions</h4>
+                <h4 className="font-bold text-white text-sm">3. Camera & Microphone Permissions</h4>
                 <p>
                   Video and audio calls require access to your device microphone and camera. Streams are transmitted peer-to-peer or via secured WebRTC / ZEGOCLOUD channels and are never recorded without consent.
                 </p>
               </section>
 
               <section className="space-y-1">
-                <h4 className="font-bold text-white text-sm">3. Data Isolation & Security</h4>
+                <h4 className="font-bold text-white text-sm">4. Data Isolation & Security</h4>
                 <p>
                   Your information is secured via Firebase Firestore authentication and security rules. Sensitive payment processing occurs through certified PCI-DSS test gateways (Cashfree / PhonePe sandbox).
                 </p>
               </section>
 
               <section className="space-y-1">
-                <h4 className="font-bold text-white text-sm">4. Hard Deletion Rights (GDPR / CCPA)</h4>
+                <h4 className="font-bold text-white text-sm">5. Hard Deletion Rights (GDPR / CCPA)</h4>
                 <p>
                   You retain full ownership of your data. You can delete your account at any time, which irrevocably scrubs your user document from Firestore.
                 </p>

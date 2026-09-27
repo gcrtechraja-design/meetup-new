@@ -42,11 +42,11 @@ const MainApp: React.FC = () => {
   }, []);
 
   // Authentication Guard:
-  // Check if user is logged in (localStorage & currentUser).
+  // Check if user is logged in strictly via verified currentUser.
   // If not logged in, redirect to Login page immediately.
   // Do not allow access to Home, Matches, Chat, or any other page without login.
-  // Keep the user on Login page until they login with demo number.
-  const isUserLoggedIn = !!currentUser || !!localStorage.getItem('meetup_active_user_uid');
+  // Keep the user on Login page until they login with verified credentials.
+  const isUserLoggedIn = !!currentUser;
 
   useEffect(() => {
     if (loading) return;

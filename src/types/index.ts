@@ -5,6 +5,7 @@ export interface UserProfile {
   uid: string;
   name: string;
   email: string;
+  phone?: string;
   phone_number?: string;
   password_hash?: string;
   age: number;
@@ -12,9 +13,12 @@ export interface UserProfile {
   location: string;
   bio: string;
   profile_pic: string;
+  avatar_url?: string;
   interests: string[];
   language: string;
   role: UserRole;
+  is_admin?: boolean;
+  isAdmin?: boolean;
   coins_balance: number;
   diamonds_balance: number;
   voice_rate: number;
@@ -25,11 +29,17 @@ export interface UserProfile {
   presence_status?: string;
   presence?: string;
   is_available?: boolean;
+  city?: string;
+  latitude?: number;
+  longitude?: number;
+  allowVideoCalls?: boolean;
   in_call?: boolean;
   call_started_at?: any;
   average_duration?: number;
   fcm_token?: string;
   fcm_token_updated_at?: any;
+  background_call_notify?: boolean;
+  background_call_notifications?: boolean;
   is_blocked: boolean;
   isBlocked?: boolean;
   created_at: any;
@@ -97,6 +107,7 @@ export interface ListenerApplication {
   audio_bio?: string;
   voice_rate?: number;
   video_rate?: number;
+  allowVideoCalls?: boolean;
   created_at: any;
 }
 

@@ -30,6 +30,11 @@ export function getStaticCdnUrl(originalUrl?: string | null, options?: { width?:
     return getDefaultFemaleAvatar('meetup-customer');
   }
 
+  // If Supabase Storage public URL, return directly (Supabase serves public photos directly)
+  if (originalUrl.includes('supabase.co/storage') || originalUrl.includes('/storage/v1/object/public/photos')) {
+    return originalUrl;
+  }
+
   // If already a static.io CDN url, return as is
   if (originalUrl.includes('cdn.statically.io') || originalUrl.includes('cdn.static.io')) {
     return originalUrl;

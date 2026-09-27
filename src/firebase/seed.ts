@@ -1,6 +1,8 @@
-import { collection, doc, getDocs, query, where, setDoc, serverTimestamp } from 'firebase/firestore';
+import { collection, doc, getDocs, query, where, setDoc, deleteDoc, serverTimestamp } from 'firebase/firestore';
 import { db } from './config';
 import { UserProfile } from '../types';
+import { findCity } from '../utils/cities';
+import { isAdminEmail } from '../utils/admin';
 
 export const SEED_LISTENERS: Omit<UserProfile, 'uid' | 'created_at'>[] = [
   {
@@ -9,6 +11,10 @@ export const SEED_LISTENERS: Omit<UserProfile, 'uid' | 'created_at'>[] = [
     age: 22,
     gender: 'female',
     location: 'Chennai, Tamil Nadu',
+    city: 'Chennai',
+    latitude: 13.0827,
+    longitude: 80.2707,
+    allowVideoCalls: true,
     bio: 'Software engineer by day, friendly listener by evening. Traditional Bharatanatyam dancer who loves modern cinema, Carnatic fusion, and deep conversations over filter coffee.',
     profile_pic: 'https://randomuser.me/api/portraits/women/11.jpg',
     interests: ['Classical Dance', 'Filter Coffee', 'Tech & AI', 'Deep Talks'],
@@ -29,6 +35,10 @@ export const SEED_LISTENERS: Omit<UserProfile, 'uid' | 'created_at'>[] = [
     age: 21,
     gender: 'female',
     location: 'Coimbatore, Tamil Nadu',
+    city: 'Coimbatore',
+    latitude: 11.0168,
+    longitude: 76.9558,
+    allowVideoCalls: true,
     bio: 'Kind-hearted literature grad. Balanced blend of modern cafe culture and traditional Tamil poetry. Let us share laughter, acoustic songs, and calm vibes after a long day.',
     profile_pic: 'https://randomuser.me/api/portraits/women/22.jpg',
     interests: ['Tamil Poetry', 'Books & Novels', 'Acoustic Guitar', 'Mindfulness'],
@@ -49,6 +59,10 @@ export const SEED_LISTENERS: Omit<UserProfile, 'uid' | 'created_at'>[] = [
     age: 20,
     gender: 'female',
     location: 'Madurai, Tamil Nadu',
+    city: 'Madurai',
+    latitude: 9.9252,
+    longitude: 78.1198,
+    allowVideoCalls: true,
     bio: 'Madurai ponnu with a contagious smile! College final year student who loves spicy street food, temple architecture, and chatting about college life and dreams.',
     profile_pic: 'https://randomuser.me/api/portraits/women/32.jpg',
     interests: ['Street Food', 'Tamil Cinema', 'College Stories', 'Photography'],
@@ -69,6 +83,10 @@ export const SEED_LISTENERS: Omit<UserProfile, 'uid' | 'created_at'>[] = [
     age: 23,
     gender: 'female',
     location: 'Trichy, Tamil Nadu',
+    city: 'Trichy',
+    latitude: 10.7905,
+    longitude: 78.7047,
+    allowVideoCalls: true,
     bio: 'Certified yoga instructor and wellness podcaster. Calm, grounded, and empathetic. Here to listen whenever you need a soothing voice or an open non-judgmental space.',
     profile_pic: 'https://randomuser.me/api/portraits/women/44.jpg',
     interests: ['Yoga', 'Mental Wellness', 'Nature Walks', 'Meditation'],
@@ -89,6 +107,10 @@ export const SEED_LISTENERS: Omit<UserProfile, 'uid' | 'created_at'>[] = [
     age: 19,
     gender: 'female',
     location: 'Salem, Tamil Nadu',
+    city: 'Salem',
+    latitude: 11.6643,
+    longitude: 78.1460,
+    allowVideoCalls: false, // Example audio only listener
     bio: 'Fine arts student & modern graphic designer. Passionate about retro Ilayaraja tunes, nighttime sketching, and heartwarming life stories.',
     profile_pic: 'https://randomuser.me/api/portraits/women/47.jpg',
     interests: ['Retro Music', 'Graphic Design', 'Night Owl', 'Art & Sketching'],
@@ -109,6 +131,10 @@ export const SEED_LISTENERS: Omit<UserProfile, 'uid' | 'created_at'>[] = [
     age: 21,
     gender: 'female',
     location: 'Tirunelveli, Tamil Nadu',
+    city: 'Tirunelveli',
+    latitude: 8.7139,
+    longitude: 77.7567,
+    allowVideoCalls: true,
     bio: 'Sweet halwa city native speaking fluent Tamil & Telugu. Upbeat, caring, and loves talking about music, celebrations, fashion, and everyday happiness.',
     profile_pic: 'https://randomuser.me/api/portraits/women/57.jpg',
     interests: ['Dance', 'Tamil & Telugu Hits', 'Fashion', 'Celebrations'],
@@ -129,6 +155,10 @@ export const SEED_LISTENERS: Omit<UserProfile, 'uid' | 'created_at'>[] = [
     age: 24,
     gender: 'female',
     location: 'Vellore, Tamil Nadu',
+    city: 'Vellore',
+    latitude: 12.9165,
+    longitude: 79.1325,
+    allowVideoCalls: true,
     bio: 'Tech professional who loves mentoring and friendly chats. A thoughtful listener who can give you warm perspective on career stress or life crossroads.',
     profile_pic: 'https://randomuser.me/api/portraits/women/62.jpg',
     interests: ['Self-Growth', 'Podcasts', 'Tea Sessions', 'Life Advice'],
@@ -149,6 +179,10 @@ export const SEED_LISTENERS: Omit<UserProfile, 'uid' | 'created_at'>[] = [
     age: 22,
     gender: 'female',
     location: 'Erode, Tamil Nadu',
+    city: 'Erode',
+    latitude: 11.3410,
+    longitude: 77.7172,
+    allowVideoCalls: true,
     bio: 'Home baker and foodie with a golden heart. Loves exchanging recipes, funny memories, and listening to people from all walks of life.',
     profile_pic: 'https://randomuser.me/api/portraits/women/65.jpg',
     interests: ['Baking', 'Traditional Recipes', 'Humor', 'Gardening'],
@@ -169,6 +203,10 @@ export const SEED_LISTENERS: Omit<UserProfile, 'uid' | 'created_at'>[] = [
     age: 23,
     gender: 'female',
     location: 'Tiruppur, Tamil Nadu',
+    city: 'Tiruppur',
+    latitude: 11.1085,
+    longitude: 77.3411,
+    allowVideoCalls: true,
     bio: 'Textile styling graduate with high energy and cheerful vibes. Whether you want a friendly banter or deep venting, I am always right here!',
     profile_pic: 'https://randomuser.me/api/portraits/women/68.jpg',
     interests: ['Ethnic Wear', 'Travel', 'Banter', 'Pop Culture'],
@@ -189,6 +227,10 @@ export const SEED_LISTENERS: Omit<UserProfile, 'uid' | 'created_at'>[] = [
     age: 24,
     gender: 'female',
     location: 'Thanjavur, Tamil Nadu',
+    city: 'Thanjavur',
+    latitude: 10.7870,
+    longitude: 79.1378,
+    allowVideoCalls: true,
     bio: 'Veena player & traditional storyteller from Thanjavur. Modern outlook with deep roots in heritage, art, and nostalgic conversations.',
     profile_pic: 'https://randomuser.me/api/portraits/women/71.jpg',
     interests: ['Carnatic Veena', 'Heritage', 'Storytelling', 'South Indian Art'],
@@ -209,6 +251,10 @@ export const SEED_LISTENERS: Omit<UserProfile, 'uid' | 'created_at'>[] = [
     age: 20,
     gender: 'female',
     location: 'Dindigul, Tamil Nadu',
+    city: 'Dindigul',
+    latitude: 10.3673,
+    longitude: 77.9803,
+    allowVideoCalls: false, // Example audio only listener
     bio: 'Bubbly college student speaking Malayalam and Tamil. Huge fan of anime, campus humor, and late night discussions. No awkward silences with me!',
     profile_pic: 'https://randomuser.me/api/portraits/women/75.jpg',
     interests: ['Anime & Manga', 'Memes', 'Music Streaming', 'Gaming'],
@@ -229,6 +275,10 @@ export const SEED_LISTENERS: Omit<UserProfile, 'uid' | 'created_at'>[] = [
     age: 24,
     gender: 'female',
     location: 'Kanchipuram, Tamil Nadu',
+    city: 'Kanchipuram',
+    latitude: 12.8342,
+    longitude: 79.7036,
+    allowVideoCalls: true,
     bio: 'Silk saree lover and patient soul. Gentle, observant, and respectful. An understanding companion for all your emotional highs and lows.',
     profile_pic: 'https://randomuser.me/api/portraits/women/79.jpg',
     interests: ['Traditional Weaves', 'Classical Songs', 'Philosophy', 'Calm Talks'],
@@ -249,6 +299,10 @@ export const SEED_LISTENERS: Omit<UserProfile, 'uid' | 'created_at'>[] = [
     age: 21,
     gender: 'female',
     location: 'Puducherry',
+    city: 'Puducherry',
+    latitude: 11.9416,
+    longitude: 79.8083,
+    allowVideoCalls: true,
     bio: 'French colony girl with a love for ocean sunsets, acoustic indie bands, and cycling along Promenade Beach. Cheerful, modern, and easy-going.',
     profile_pic: 'https://randomuser.me/api/portraits/women/83.jpg',
     interests: ['Beach Sunsets', 'Indie Music', 'Cycling', 'French & Tamil'],
@@ -269,6 +323,10 @@ export const SEED_LISTENERS: Omit<UserProfile, 'uid' | 'created_at'>[] = [
     age: 22,
     gender: 'female',
     location: 'Nagercoil, Tamil Nadu',
+    city: 'Nagercoil',
+    latitude: 8.1833,
+    longitude: 77.4119,
+    allowVideoCalls: true,
     bio: 'Southern tip adventurer surrounded by Western Ghats. Loves talking about nature trips, local traditions, coffee, and quiet rainy evenings.',
     profile_pic: 'https://randomuser.me/api/portraits/women/86.jpg',
     interests: ['Hill Treks', 'Rainy Days', 'Nature', 'Coffee Chats'],
@@ -289,6 +347,10 @@ export const SEED_LISTENERS: Omit<UserProfile, 'uid' | 'created_at'>[] = [
     age: 19,
     gender: 'female',
     location: 'Kumbakonam, Tamil Nadu',
+    city: 'Kumbakonam',
+    latitude: 10.9602,
+    longitude: 79.3845,
+    allowVideoCalls: true,
     bio: 'Temple town college student with traditional roots and modern dreams. Loves classical Carnatic music, spicy snacks, and hearty heartfelt talks.',
     profile_pic: 'https://randomuser.me/api/portraits/women/90.jpg',
     interests: ['Carnatic Songs', 'Traditional Snacking', 'College Life', 'Friendship'],
@@ -308,21 +370,28 @@ export const SEED_LISTENERS: Omit<UserProfile, 'uid' | 'created_at'>[] = [
 export async function seedFirestoreDatabase(forceRefresh = false): Promise<void> {
   try {
     const usersRef = collection(db, 'users');
+    const validSeedIds = new Set(SEED_LISTENERS.map((_, i) => `listener_seed_${i + 1}`));
+
+    // 1. Seed or refresh the 15 dummy listener profiles
     const q = query(usersRef, where('role', '==', 'listener'));
     const snapshot = await getDocs(q);
 
-    // If fewer than 15 listeners exist or force refresh requested, seed the 15 profiles
-    if (snapshot.size < 15 || forceRefresh) {
-      console.log('Seeding 15 real South Indian female listener profiles...');
+    if (snapshot.size !== 15 || forceRefresh) {
+      console.log('Seeding / verifying 15 real South Indian female listener profiles...');
       for (let i = 0; i < SEED_LISTENERS.length; i++) {
         const listener = SEED_LISTENERS[i];
         const docId = `listener_seed_${i + 1}`;
+        const cityData = findCity(listener.location);
         await setDoc(
           doc(db, 'users', docId),
           {
             ...listener,
             uid: docId,
             role: 'listener',
+            city: listener.city || cityData.name,
+            latitude: listener.latitude ?? cityData.lat,
+            longitude: listener.longitude ?? cityData.lng,
+            allowVideoCalls: listener.allowVideoCalls !== false,
             audio_rate_coins: listener.audio_rate_coins ?? listener.voice_rate ?? 20,
             video_rate_coins: listener.video_rate_coins ?? listener.video_rate ?? 50,
             isBlocked: false,
@@ -334,36 +403,92 @@ export async function seedFirestoreDatabase(forceRefresh = false): Promise<void>
           { merge: true }
         );
       }
-      console.log('15 Listener profiles seeded successfully with real Indian portraits.');
+      console.log('15 Listener profiles verified and seeded successfully.');
     }
 
-    // Also seed default admin user document if not existing
-    const adminDocRef = doc(db, 'users', 'admin_meetup_uid');
-    await setDoc(
-      adminDocRef,
+    // 2. Seed or verify official platform administrators
+    const officialAdmins = [
       {
-        uid: 'admin_meetup_uid',
-        name: 'Meet Up Admin',
-        email: 'admin@meetup.com',
-        age: 26,
-        gender: 'female',
-        location: 'Chennai, Tamil Nadu',
-        bio: 'Meet Up Platform Super Administrator',
-        profile_pic: 'https://randomuser.me/api/portraits/women/62.jpg',
-        interests: ['Platform Safety', 'Moderation', 'Community'],
-        language: 'en',
-        role: 'admin',
-        coins_balance: 9999,
-        diamonds_balance: 500,
-        voice_rate: 20,
-        video_rate: 50,
-        status: 'online',
-        is_blocked: false,
-        created_at: serverTimestamp(),
+        uid: 'admin_gcrtech_raja',
+        name: 'Raja Admin',
+        email: 'gcrtech.raja@gmail.com',
+        bio: 'Meet Up Platform Administrator',
+        profile_pic: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=300&h=300&fit=crop&crop=faces',
       },
-      { merge: true }
-    );
+      {
+        uid: 'admin_mrraavana07',
+        name: 'Raavana Admin',
+        email: 'mrraavana07@gmail.com',
+        bio: 'Meet Up Platform Administrator',
+        profile_pic: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=300&h=300&fit=crop&crop=faces',
+      },
+    ];
+
+    for (const admin of officialAdmins) {
+      const adminDocRef = doc(db, 'users', admin.uid);
+      const snap = await getDocs(query(usersRef, where('email', '==', admin.email)));
+      // If no document exists with this email, seed the standard admin doc
+      if (snap.empty) {
+        await setDoc(adminDocRef, {
+          uid: admin.uid,
+          name: admin.name,
+          email: admin.email,
+          age: 30,
+          gender: 'other',
+          location: 'Chennai, Tamil Nadu',
+          city: 'Chennai',
+          latitude: 13.0827,
+          longitude: 80.2707,
+          allowVideoCalls: true,
+          bio: admin.bio,
+          profile_pic: admin.profile_pic,
+          interests: ['Safety', 'Platform Operations', 'Moderation'],
+          language: 'en',
+          role: 'admin',
+          is_admin: true,
+          isAdmin: true,
+          coins_balance: 9999,
+          diamonds_balance: 500,
+          voice_rate: 20,
+          video_rate: 50,
+          status: 'online',
+          isBlocked: false,
+          is_blocked: false,
+          created_at: serverTimestamp(),
+          createdAt: serverTimestamp(),
+        });
+      }
+    }
+
+    // 3. Remove any extra listener profiles or stale test/phone accounts
+    const allUsersSnap = await getDocs(usersRef);
+    for (const userDoc of allUsersSnap.docs) {
+      const data = userDoc.data();
+      const docId = userDoc.id;
+
+      // Always protect official admins from deletion
+      if (isAdminEmail(data.email) || docId === 'admin_gcrtech_raja' || docId === 'admin_mrraavana07') {
+        continue;
+      }
+
+      // If document is marked as listener but not one of the 15 dummy listeners, remove it
+      if (data.role === 'listener' && !validSeedIds.has(docId)) {
+        console.log(`Removing extra listener profile: ${docId} (${data.name})`);
+        await deleteDoc(doc(db, 'users', docId));
+      }
+
+      // If document is an old demo phone account, remove it
+      if (docId.startsWith('phone_') || data.email?.endsWith('@meetup.user')) {
+        console.log(`Removing demo phone account: ${docId}`);
+        await deleteDoc(doc(db, 'users', docId));
+      }
+
+      // If document is duplicate or legacy placeholder admin
+      if (docId === 'admin_meetup_super' || docId === 'admin_meetup_uid') {
+        await deleteDoc(doc(db, 'users', docId));
+      }
+    }
   } catch (error) {
-    console.error('Error during Firestore database seeding:', error);
+    console.error('Error during Firestore database seeding and profile cleanup:', error);
   }
 }

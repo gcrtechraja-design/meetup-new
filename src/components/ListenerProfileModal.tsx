@@ -117,7 +117,7 @@ export const ListenerProfileModal: React.FC<ListenerProfileModalProps> = ({
           {/* Rates Banner */}
           <div>
             <h4 className="text-xs font-bold text-zinc-400 uppercase tracking-wider mb-2">Call Rates</h4>
-            <div className="grid grid-cols-2 gap-3">
+            <div className={`grid ${user.allowVideoCalls !== false ? 'grid-cols-2' : 'grid-cols-1'} gap-3`}>
               <div className="p-3 bg-[#0B0B0E] border border-zinc-800 rounded-2xl flex items-center justify-between">
                 <div className="flex items-center gap-2">
                   <div className="p-2 rounded-xl bg-emerald-500/20 text-emerald-400">
@@ -129,26 +129,28 @@ export const ListenerProfileModal: React.FC<ListenerProfileModalProps> = ({
                   </div>
                 </div>
                 <div className="text-right">
-                  <span className="text-base font-black text-amber-300">{user.voice_rate || 20}</span>
+                  <span className="text-base font-black text-amber-300">{user.voice_rate || user.audio_rate_coins || 20}</span>
                   <span className="text-[10px] text-zinc-500 block">coins/min</span>
                 </div>
               </div>
 
-              <div className="p-3 bg-[#0B0B0E] border border-zinc-800 rounded-2xl flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <div className="p-2 rounded-xl bg-[#FF69B4]/20 text-[#FF69B4]">
-                    <Video className="w-4 h-4" />
+              {user.allowVideoCalls !== false && (
+                <div className="p-3 bg-[#0B0B0E] border border-zinc-800 rounded-2xl flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <div className="p-2 rounded-xl bg-[#FF69B4]/20 text-[#FF69B4]">
+                      <Video className="w-4 h-4" />
+                    </div>
+                    <div>
+                      <div className="text-xs text-zinc-400 font-medium">Video Call</div>
+                      <div className="text-xs text-[#FF69B4] font-semibold">HD Quality</div>
+                    </div>
                   </div>
-                  <div>
-                    <div className="text-xs text-zinc-400 font-medium">Video Call</div>
-                    <div className="text-xs text-[#FF69B4] font-semibold">HD Quality</div>
+                  <div className="text-right">
+                    <span className="text-base font-black text-amber-300">{user.video_rate || user.video_rate_coins || 50}</span>
+                    <span className="text-[10px] text-zinc-500 block">coins/min</span>
                   </div>
                 </div>
-                <div className="text-right">
-                  <span className="text-base font-black text-amber-300">{user.video_rate || 50}</span>
-                  <span className="text-[10px] text-zinc-500 block">coins/min</span>
-                </div>
-              </div>
+              )}
             </div>
           </div>
 
@@ -189,9 +191,9 @@ export const ListenerProfileModal: React.FC<ListenerProfileModalProps> = ({
         </div>
 
         {/* Bottom Sticky Action Bar */}
-        <div className="p-4 bg-[#0B0B0E] border-t border-[#23232C] grid grid-cols-2 gap-3 sticky bottom-0">
+        <div className={`p-4 bg-[#0B0B0E] border-t border-[#23232C] grid ${user.allowVideoCalls !== false ? 'grid-cols-2' : 'grid-cols-1'} gap-3 sticky bottom-0`}>
           {isOffline && (
-            <div className="col-span-2 text-center text-xs text-zinc-400 pb-1 flex items-center justify-center gap-1.5 bg-zinc-900/60 py-2 rounded-xl border border-zinc-800">
+            <div className={`${user.allowVideoCalls !== false ? 'col-span-2' : 'col-span-1'} text-center text-xs text-zinc-400 pb-1 flex items-center justify-center gap-1.5 bg-zinc-900/60 py-2 rounded-xl border border-zinc-800`}>
               <span className="w-2 h-2 rounded-full bg-zinc-500"></span>
               <span>{user.name} is currently offline and unavailable for calls</span>
             </div>
@@ -204,7 +206,7 @@ export const ListenerProfileModal: React.FC<ListenerProfileModalProps> = ({
               onVoiceCall(user);
             }}
             disabled={isOffline}
-            className={`flex items-center justify-center gap-2 py-3 px-4 rounded-xl font-bold text-sm transition shadow-md active:scale-95 ${
+            className={`flex items-center justify-center gap-2 py-3 px-4 rounded-xl font-bold text-sm transition shadow-md active:scale-95 cursor-pointer ${
               isOffline
                 ? 'bg-zinc-800/60 text-zinc-500 border border-zinc-800 cursor-not-allowed'
                 : 'bg-emerald-500 hover:bg-emerald-600 text-white'
@@ -214,22 +216,24 @@ export const ListenerProfileModal: React.FC<ListenerProfileModalProps> = ({
             {isOffline ? t('offline') : t('voiceCall')}
           </button>
 
-          <button
-            onClick={() => {
-              if (isOffline) return;
-              onClose();
-              onVideoCall(user);
-            }}
-            disabled={isOffline}
-            className={`flex items-center justify-center gap-2 py-3 px-4 rounded-xl font-bold text-sm transition active:scale-95 ${
-              isOffline
-                ? 'bg-zinc-800/60 text-zinc-500 border border-zinc-800 cursor-not-allowed'
-                : 'bg-gradient-to-r from-[#FF69B4] to-pink-600 hover:opacity-95 text-white shadow-[0_0_15px_rgba(255,105,180,0.5)]'
-            }`}
-          >
-            <Video className="w-4 h-4" />
-            {isOffline ? t('offline') : t('videoCall')}
-          </button>
+          {user.allowVideoCalls !== false && (
+            <button
+              onClick={() => {
+                if (isOffline) return;
+                onClose();
+                onVideoCall(user);
+              }}
+              disabled={isOffline}
+              className={`flex items-center justify-center gap-2 py-3 px-4 rounded-xl font-bold text-sm transition active:scale-95 cursor-pointer ${
+                isOffline
+                  ? 'bg-zinc-800/60 text-zinc-500 border border-zinc-800 cursor-not-allowed'
+                  : 'bg-gradient-to-r from-[#FF69B4] to-pink-600 hover:opacity-95 text-white shadow-[0_0_15px_rgba(255,105,180,0.5)]'
+              }`}
+            >
+              <Video className="w-4 h-4" />
+              {isOffline ? t('offline') : t('videoCall')}
+            </button>
+          )}
         </div>
       </div>
     </div>

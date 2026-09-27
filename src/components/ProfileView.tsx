@@ -24,17 +24,23 @@ import {
   X,
   Loader2,
   Image as ImageIcon,
-  Bell
+  Bell,
+  MapPin,
+  AlertCircle
 } from 'lucide-react';
 import { FavoritesModal } from './FavoritesModal';
 import { AvatarPickerBottomSheet } from './AvatarPickerBottomSheet';
+import { BackgroundCallNotificationsModal } from './BackgroundCallNotificationsModal';
 import { useAuth } from '../context/AuthContext';
 import { useTranslation, SupportedLanguage, LANGUAGES } from '../utils/i18n';
 import { getStaticCdnUrl, uploadImageToStaticCdn, getUserAvatarUrl, getDefaultFemaleAvatar } from '../services/staticCdnService';
+import { uploadPhotoToSupabase, syncUserToSupabase } from '../services/supabase';
 import { doc, updateDoc } from 'firebase/firestore';
 import { updateProfile } from 'firebase/auth';
 import { db, auth } from '../firebase/config';
 import { isListenerOffline } from '../utils/presence';
+import { CITIES, findCity } from '../utils/cities';
+import { isUserAdmin } from '../utils/admin';
 import appLogo from '../assets/images/app_logo_1790170748297.jpg';
 
 interface ProfileViewProps {
@@ -86,9 +92,28 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
   const [isEditingName, setIsEditingName] = useState(false);
   const [nameInput, setNameInput] = useState('');
   const [savingName, setSavingName] = useState(false);
+  const [isEditingCity, setIsEditingCity] = useState(false);
+
+  // Background Call Notifications Bottom Sheet & Toast State
+  const [showNotificationModal, setShowNotificationModal] = useState(false);
+  const [toastMessage, setToastMessage] = useState<{ text: string; type: 'success' | 'info' | 'error' } | null>(null);
+  const toastTimerRef = useRef<any>(null);
+
+  const showToast = (text: string, type: 'success' | 'info' | 'error' = 'success') => {
+    if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+    setToastMessage({ text, type });
+    toastTimerRef.current = setTimeout(() => {
+      setToastMessage(null);
+    }, 3500);
+  };
+
+  const isBgNotifyActive = 
+    currentUser?.background_call_notify !== false &&
+    (typeof window !== 'undefined' ? localStorage.getItem('background_call_notify') !== 'false' : true);
 
   const currentLangLabel = LANGUAGES.find((l) => l.code === lang)?.label || 'English';
   const isCurrentListenerOffline = isListenerOffline(currentUser);
+  const isAdmin = isUserAdmin(currentUser);
 
   if (!currentUser) {
     return (
@@ -208,28 +233,63 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
     }
   };
 
-  // Upload user profile image through static.io CDN pipeline
+  // Upload user profile image through Supabase Storage 'photos' bucket
   const handleProfileImageChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file || !currentUser) return;
 
+    // File validation (max 10MB)
+    if (file.size > 10 * 1024 * 1024) {
+      alert('Photo size exceeds 10MB limit. Please select a smaller photo.');
+      if (e.target) e.target.value = '';
+      return;
+    }
+
     setUploadingPic(true);
-    setUploadNotice(null);
+    setUploadNotice('Uploading photo to Supabase Storage...');
 
     try {
-      // Process with static.io CDN image helper
-      const cdnUrl = await uploadImageToStaticCdn(file);
-      // Persist to Firestore
+      // 1. Upload selected photo to 'photos' bucket and get public URL
+      const publicUrl = await uploadPhotoToSupabase(file, currentUser.uid);
+
+      // 2. Persist public URL to Firestore user profile
       await updateDoc(doc(db, 'users', currentUser.uid), {
-        profile_pic: cdnUrl,
+        profile_pic: publicUrl,
+        avatar_url: publicUrl,
       });
-      setUploadNotice('Profile image hosted on static.io CDN successfully!');
-      setTimeout(() => setUploadNotice(null), 3000);
+
+      // 3. Sync to Supabase users table if available
+      try {
+        await syncUserToSupabase({
+          ...currentUser,
+          profile_pic: publicUrl,
+          avatar_url: publicUrl,
+        });
+      } catch (syncErr) {
+        console.warn('Notice: user table sync after photo upload:', syncErr);
+      }
+
+      setUploadNotice('Photo uploaded to Supabase Storage & updated successfully!');
+      setTimeout(() => setUploadNotice(null), 3500);
     } catch (err: any) {
-      console.error('Image upload failed:', err);
-      alert(err.message || 'Image upload failed.');
+      console.error('Supabase photo upload error:', err);
+      // Fallback if Supabase credentials are not yet set in environment
+      if (err.message?.includes('Supabase is not configured')) {
+        try {
+          const fallbackUrl = await uploadImageToStaticCdn(file);
+          await updateDoc(doc(db, 'users', currentUser.uid), {
+            profile_pic: fallbackUrl,
+          });
+          setUploadNotice('Photo saved to profile (Supabase credentials pending in env)');
+          setTimeout(() => setUploadNotice(null), 3500);
+          return;
+        } catch {}
+      }
+      alert(err.message || 'Photo upload failed. Please verify Supabase Storage configuration.');
     } finally {
       setUploadingPic(false);
+      // Reset input element value so user can re-upload if needed
+      if (e.target) e.target.value = '';
     }
   };
 
@@ -397,7 +457,7 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
                 >
                   <Pencil className="w-3.5 h-3.5 text-[#FF69B4]" />
                 </button>
-                {currentUser?.role === 'admin' && (
+                {isAdmin && (
                   <span className="px-2 py-0.5 rounded-full bg-[#FF69B4]/20 border border-[#FF69B4] text-[#FF69B4] text-[10px] font-bold">
                     Admin
                   </span>
@@ -411,7 +471,56 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
               </div>
             )}
             <p className="text-xs text-zinc-400 mt-0.5">{currentUser?.email}</p>
-            <p className="text-xs text-zinc-500 mt-0.5">{currentUser?.location}</p>
+            {/* City & Location selector */}
+            <div className="mt-1 flex items-center gap-1.5 flex-wrap">
+              <MapPin className="w-3.5 h-3.5 text-[#FF69B4] shrink-0" />
+              {isEditingCity ? (
+                <div className="flex items-center gap-1">
+                  <select
+                    value={currentUser?.city || 'Chennai'}
+                    onChange={async (e) => {
+                      const cityName = e.target.value;
+                      const cityInfo = findCity(cityName);
+                      await updateDoc(doc(db, 'users', currentUser.uid), {
+                        city: cityInfo.name,
+                        location: `${cityInfo.name}, ${cityInfo.state}`,
+                        latitude: cityInfo.lat,
+                        longitude: cityInfo.lng,
+                      });
+                      setIsEditingCity(false);
+                      setUploadNotice('City & GPS coordinates saved!');
+                      setTimeout(() => setUploadNotice(null), 3000);
+                    }}
+                    className="bg-[#0B0B0E] border border-[#FF69B4] rounded-lg px-2 py-0.5 text-xs text-white focus:outline-none"
+                  >
+                    {CITIES.map((c) => (
+                      <option key={c.name} value={c.name}>
+                        {c.name}, {c.state}
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    onClick={() => setIsEditingCity(false)}
+                    className="p-1 rounded bg-zinc-800 text-zinc-400 hover:text-white text-[10px]"
+                  >
+                    <X className="w-3 h-3" />
+                  </button>
+                </div>
+              ) : (
+                <div className="flex items-center gap-1">
+                  <span className="text-xs text-zinc-300 font-medium">
+                    {currentUser?.city ? `${currentUser.city} (${currentUser.location})` : currentUser?.location || 'Chennai, Tamil Nadu'}
+                  </span>
+                  <button
+                    onClick={() => setIsEditingCity(true)}
+                    className="p-0.5 text-[#FF69B4] hover:text-pink-300 transition"
+                    title="Change City"
+                  >
+                    <Pencil className="w-3 h-3" />
+                  </button>
+                </div>
+              )}
+            </div>
           </div>
         </div>
 
@@ -490,10 +599,52 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
           </div>
         )}
 
+        {/* Listener Call Preference Toggle (Allow Video Calls ON/OFF) */}
+        {currentUser?.role === 'listener' && (
+          <div className="mt-3 p-3.5 bg-[#0B0B0E] rounded-2xl border border-zinc-800 flex items-center justify-between">
+            <div className="flex items-center gap-2.5">
+              <div className={`p-2 rounded-xl ${currentUser.allowVideoCalls !== false ? 'bg-[#FF69B4]/20 text-[#FF69B4]' : 'bg-zinc-800 text-zinc-500'}`}>
+                <Video className="w-4 h-4" />
+              </div>
+              <div>
+                <span className="text-xs font-bold text-white block">
+                  Allow Video Calls: {currentUser.allowVideoCalls !== false ? 'ON' : 'OFF'}
+                </span>
+                <span className="text-[10px] text-zinc-400 block">
+                  {currentUser.allowVideoCalls !== false
+                    ? 'Both Audio and Video call buttons are visible on your card & profile.'
+                    : 'Audio Only: Video call button is hidden on your card & profile.'}
+                </span>
+              </div>
+            </div>
+
+            <button
+              type="button"
+              onClick={async () => {
+                const newPref = currentUser.allowVideoCalls === false;
+                await updateDoc(doc(db, 'users', currentUser.uid), {
+                  allowVideoCalls: newPref,
+                });
+                setUploadNotice(`Video calls ${newPref ? 'enabled (Audio + Video)' : 'disabled (Audio Only)'}`);
+                setTimeout(() => setUploadNotice(null), 3000);
+              }}
+              className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
+                currentUser.allowVideoCalls !== false ? 'bg-[#FF69B4]' : 'bg-zinc-700'
+              }`}
+            >
+              <span
+                className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
+                  currentUser.allowVideoCalls !== false ? 'translate-x-5' : 'translate-x-0'
+                }`}
+              />
+            </button>
+          </div>
+        )}
+
         {uploadingPic && (
-          <div className="mt-3 text-xs text-amber-300 font-medium flex items-center gap-1.5">
-            <span className="w-2 h-2 rounded-full bg-amber-400 animate-ping"></span>
-            Hosting image on static.io CDN...
+          <div className="mt-3 text-xs text-pink-300 font-medium flex items-center gap-1.5">
+            <span className="w-2 h-2 rounded-full bg-[#FF69B4] animate-ping"></span>
+            Uploading photo to Supabase Storage 'photos' bucket...
           </div>
         )}
 
@@ -703,7 +854,7 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
         )}
 
         {/* Admin Dashboard if role == admin */}
-        {currentUser?.role === 'admin' && onOpenAdmin && (
+        {isAdmin && onOpenAdmin && (
           <button
             onClick={onOpenAdmin}
             className="w-full p-4 flex items-center justify-between text-left hover:bg-[#1E1E26] transition"

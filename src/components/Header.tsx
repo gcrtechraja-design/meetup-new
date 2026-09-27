@@ -2,6 +2,7 @@ import React from 'react';
 import { Coins, Sparkles, Shield, UserCheck, Crown } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useTranslation, SupportedLanguage } from '../utils/i18n';
+import { isUserAdmin } from '../utils/admin';
 import appLogo from '../assets/images/app_logo_1790170748297.jpg';
 
 interface HeaderProps {
@@ -16,6 +17,7 @@ export const Header: React.FC<HeaderProps> = ({ onOpenWallet, onOpenAdmin, onOpe
   const { t } = useTranslation(lang);
 
   const isOwner = currentUser?.role === 'owner' || localStorage.getItem('meetup_owner_authenticated') === 'true';
+  const isAdmin = isUserAdmin(currentUser);
 
   return (
     <header className="sticky top-0 z-30 w-full bg-[#0f0f1a]/95 backdrop-blur-md border-b border-[#232334] px-4 py-3">
@@ -48,7 +50,7 @@ export const Header: React.FC<HeaderProps> = ({ onOpenWallet, onOpenAdmin, onOpe
             </button>
           )}
 
-          {!isOwner && currentUser?.role === 'admin' && (
+          {!isOwner && isAdmin && (
             <button
               onClick={onOpenAdmin}
               className="ml-2 px-2.5 py-0.5 rounded-full bg-[#ff4d8d]/20 border border-[#ff4d8d] text-[#ff4d8d] text-[11px] font-bold flex items-center gap-1 hover:bg-[#ff4d8d]/30 transition shadow-[0_0_10px_rgba(255,77,141,0.3)]"

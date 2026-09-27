@@ -1288,7 +1288,7 @@ export const CallScreen: React.FC = () => {
                 ? 'bg-purple-600 text-white shadow-[0_0_20px_rgba(147,51,234,0.6)]'
                 : 'bg-[#1C1C26] hover:bg-[#252533] border border-zinc-700/80 text-zinc-300'
             }`}
-            title="Meeting Chat (Supabase Realtime)"
+            title="Meeting Chat"
           >
             <MessageSquare className="w-5 h-5" />
             {chatMessages.length > 0 && (
@@ -1300,7 +1300,32 @@ export const CallScreen: React.FC = () => {
           <span className="text-[10px] font-bold tracking-tight text-zinc-300">Chat</span>
         </div>
 
-        {/* E. Owner Remote Mute Control */}
+        {/* E. Floating Heart Reaction Button */}
+        <div className="flex flex-col items-center gap-1">
+          <button
+            onClick={handleSendHeart}
+            className={`w-12 h-12 rounded-2xl flex items-center justify-center transition-all duration-200 active:scale-90 relative select-none ${
+              isHeartPopping
+                ? 'bg-gradient-to-tr from-pink-600 to-rose-500 text-white shadow-[0_0_25px_rgba(255,105,180,0.85)] scale-110 animate-heart-pop'
+                : 'bg-pink-500/15 hover:bg-pink-500/25 border border-pink-500/40 text-pink-400 shadow-[0_0_15px_rgba(255,105,180,0.25)]'
+            }`}
+            title="Send Floating Heart Reaction (Tap to shower love)"
+          >
+            <Heart
+              className={`w-5 h-5 transition-transform duration-200 ${
+                isHeartPopping ? 'fill-white stroke-white scale-110' : 'fill-pink-500 stroke-pink-400'
+              }`}
+            />
+            {heartCount > 0 && (
+              <span className="absolute -top-1.5 -right-1.5 min-w-5 h-5 px-1 rounded-full bg-gradient-to-r from-pink-500 to-rose-500 text-white text-[10px] font-black flex items-center justify-center shadow-lg border border-pink-300 animate-bounce">
+                +{heartCount}
+              </span>
+            )}
+          </button>
+          <span className="text-[10px] font-bold tracking-tight text-pink-300">Heart</span>
+        </div>
+
+        {/* F. Owner Remote Mute Control */}
         {isOwner && (
           <div className="flex flex-col items-center gap-1">
             <button
@@ -1314,7 +1339,7 @@ export const CallScreen: React.FC = () => {
           </div>
         )}
 
-        {/* F. End Call Button */}
+        {/* G. End Call Button */}
         <div className="flex flex-col items-center gap-1">
           <button
             onClick={handleExplicitEndCall}
@@ -1325,6 +1350,30 @@ export const CallScreen: React.FC = () => {
           </button>
           <span className="text-[10px] font-bold tracking-tight text-red-400">End</span>
         </div>
+      </div>
+
+      {/* Floating Quick Reaction Heart Button (Right side, tap easily with one hand) */}
+      <div className="fixed bottom-24 right-4 sm:right-8 z-40 flex flex-col items-center gap-1 select-none">
+        <button
+          onClick={handleSendHeart}
+          className={`w-12 h-12 sm:w-14 sm:h-14 rounded-full flex items-center justify-center shadow-[0_4px_25px_rgba(255,105,180,0.5)] backdrop-blur-xl border border-pink-400/40 transition-all duration-150 active:scale-75 ${
+            isHeartPopping
+              ? 'bg-gradient-to-tr from-pink-600 via-rose-500 to-pink-400 text-white scale-120 animate-heart-pop shadow-[0_0_35px_rgba(255,105,180,0.9)]'
+              : 'bg-[#181824]/90 hover:bg-pink-500/25 text-pink-400 hover:scale-105'
+          }`}
+          title="Quick Heart Reaction"
+        >
+          <Heart
+            className={`w-6 h-6 sm:w-7 sm:h-7 transition-all ${
+              isHeartPopping ? 'fill-white stroke-white scale-110' : 'fill-pink-500/90 stroke-pink-300'
+            }`}
+          />
+          {heartCount > 1 && (
+            <span className="absolute -top-1 -right-1 px-1.5 py-0.5 rounded-full bg-rose-500 text-white font-extrabold text-[10px] border border-white/60 shadow-md animate-bounce">
+              x{heartCount}
+            </span>
+          )}
+        </button>
       </div>
 
       {/* 5. In-Call Live Chat Drawer */}

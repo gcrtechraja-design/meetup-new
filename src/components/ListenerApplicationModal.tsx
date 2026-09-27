@@ -15,6 +15,7 @@ export const ListenerApplicationModal: React.FC<ListenerApplicationModalProps> =
   const [languages, setLanguages] = useState<string[]>(['Tamil', 'English']);
   const [voiceRate, setVoiceRate] = useState<number>(20);
   const [videoRate, setVideoRate] = useState<number>(50);
+  const [allowVideoCalls, setAllowVideoCalls] = useState<boolean>(true);
   const [submitting, setSubmitting] = useState(false);
   const [submitted, setSubmitted] = useState(false);
 
@@ -43,6 +44,7 @@ export const ListenerApplicationModal: React.FC<ListenerApplicationModalProps> =
         experience,
         voice_rate: Number(voiceRate),
         video_rate: Number(videoRate),
+        allowVideoCalls,
         status: 'pending',
         created_at: serverTimestamp(),
       });
@@ -187,6 +189,29 @@ export const ListenerApplicationModal: React.FC<ListenerApplicationModalProps> =
                 </h4>
 
                 <div className="space-y-3">
+                  {/* Allow Video Calls Toggle */}
+                  <div className="p-3 bg-[#0B0B0E] border border-zinc-800 rounded-xl flex items-center justify-between">
+                    <div>
+                      <span className="text-xs font-semibold text-white block">Allow Video Calls</span>
+                      <span className="text-[10px] text-zinc-400 block">
+                        {allowVideoCalls ? 'Accept both audio & video calls (Recommended)' : 'Audio calls only (Video Call hidden)'}
+                      </span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setAllowVideoCalls(!allowVideoCalls)}
+                      className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
+                        allowVideoCalls ? 'bg-[#FF69B4]' : 'bg-zinc-700'
+                      }`}
+                    >
+                      <span
+                        className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
+                          allowVideoCalls ? 'translate-x-5' : 'translate-x-0'
+                        }`}
+                      />
+                    </button>
+                  </div>
+
                   <div>
                     <label className="text-xs text-zinc-400 block mb-1">
                       Voice Call Rate (Coins/min): <span className="text-amber-300 font-bold">{voiceRate}</span>
@@ -201,19 +226,21 @@ export const ListenerApplicationModal: React.FC<ListenerApplicationModalProps> =
                     />
                   </div>
 
-                  <div>
-                    <label className="text-xs text-zinc-400 block mb-1">
-                      Video Call Rate (Coins/min): <span className="text-amber-300 font-bold">{videoRate}</span>
-                    </label>
-                    <input
-                      type="range"
-                      min="40"
-                      max="90"
-                      value={videoRate}
-                      onChange={(e) => setVideoRate(Number(e.target.value))}
-                      className="w-full accent-[#FF69B4]"
-                    />
-                  </div>
+                  {allowVideoCalls && (
+                    <div>
+                      <label className="text-xs text-zinc-400 block mb-1">
+                        Video Call Rate (Coins/min): <span className="text-amber-300 font-bold">{videoRate}</span>
+                      </label>
+                      <input
+                        type="range"
+                        min="40"
+                        max="90"
+                        value={videoRate}
+                        onChange={(e) => setVideoRate(Number(e.target.value))}
+                        className="w-full accent-[#FF69B4]"
+                      />
+                    </div>
+                  )}
                 </div>
 
                 <div className="p-3 bg-[#0B0B0E] rounded-xl border border-zinc-800 text-[11px] text-zinc-400">

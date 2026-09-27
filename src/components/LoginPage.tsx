@@ -1,36 +1,26 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { 
   Shield, 
   User, 
   Mail, 
   Lock, 
-  MapPin, 
   CheckCircle2, 
   ArrowRight, 
   Eye, 
   EyeOff, 
   ArrowLeft,
-  PhoneCall
+  AlertCircle,
+  KeyRound
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import meetupLogo from '../assets/images/meetup_app_logo_1790184081929.jpg';
-import { ConfirmationResult, RecaptchaVerifier } from 'firebase/auth';
-import { auth } from '../firebase/config';
+import { LegalModals } from './LegalModals';
 
 interface LoginPageProps {
   onLoginSuccess?: () => void;
 }
 
-const COUNTRY_OPTIONS = [
-  { code: '+91', country: 'India', label: '+91 India' },
-  { code: '+1', country: 'USA', label: '+1 USA' },
-  { code: '+44', country: 'UK', label: '+44 UK' },
-  { code: '+971', country: 'UAE', label: '+971 UAE' },
-  { code: '+65', country: 'SG', label: '+65 Singapore' },
-  { code: '+60', country: 'MY', label: '+60 Malaysia' },
-];
-
-// Floating Hearts decorative data for realistic drifting animations
+// Floating Hearts decorative background data
 const FLOATING_HEARTS = [
   { id: 1, left: '8%', size: 18, delay: '0s', duration: '14s', opacity: 0.45 },
   { id: 2, left: '18%', size: 26, delay: '3s', duration: '18s', opacity: 0.55 },
@@ -48,347 +38,254 @@ const FLOATING_HEARTS = [
 
 export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess }) => {
   const { 
-    login, 
-    loginWithGoogle, 
-    register, 
-    loginAsSuperAdmin,
-    sendPhoneOtp,
-    verifyPhoneLogin,
-    verifyPhoneRegister
+    signInWithSupabaseAuth, 
+    signUpWithSupabaseAuth, 
+    resetPasswordForEmail,
+    loginWithGoogle,
+    loginAsSuperAdmin 
   } = useAuth();
 
-  // Mode: Sign In vs Create Account
-  const [mode, setMode] = useState<'login' | 'register'>('login');
-  // Method: Phone + OTP vs Email + Password
-  const [authMethod, setAuthMethod] = useState<'phone' | 'email'>('phone');
+  // Active Tab: 'signup' (Create Account) vs 'login' (Login)
+  const [activeTab, setActiveTab] = useState<'signup' | 'login'>('login');
 
-  // Phone Auth States
-  const [phoneStep, setPhoneStep] = useState<'enter_phone' | 'verify_otp'>('enter_phone');
-  const [countryCode, setCountryCode] = useState('+91');
-  const [phoneNumber, setPhoneNumber] = useState('');
-  const [otpCode, setOtpCode] = useState('');
-  const [confirmationResult, setConfirmationResult] = useState<ConfirmationResult | null>(null);
-  const [countdown, setCountdown] = useState(0);
-  const [resending, setResending] = useState(false);
-
-  // Email Auth States
+  // Form Fields
+  const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+
+  // Password Visibility Toggles
   const [showPassword, setShowPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
 
-  // Profile Fields (for Register mode)
-  const [name, setName] = useState('');
-  const [age, setAge] = useState<number>(23);
-  const [gender, setGender] = useState<'male' | 'female' | 'other'>('female');
-  const [location, setLocation] = useState('Chennai, Tamil Nadu');
-  const [bio, setBio] = useState('');
-  const [confirm18, setConfirm18] = useState(false);
-  const [accountType, setAccountType] = useState<'user' | 'listener'>('user');
+  // Forgot Password Mode
+  const [isForgotPassword, setIsForgotPassword] = useState(false);
+  const [forgotEmail, setForgotEmail] = useState('');
+  const [forgotSubmitted, setForgotSubmitted] = useState(false);
 
-  // UI / Status states
+  // Status & Feedback States
+  const [submitting, setSubmitting] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [infoMsg, setInfoMsg] = useState<string | null>(null);
-  const [submitting, setSubmitting] = useState(false);
+  const [showPrivacyModal, setShowPrivacyModal] = useState(false);
 
-  // Super Admin Password Popup States
+  // Hidden Super Admin access modal
   const [showAdminModal, setShowAdminModal] = useState(false);
   const [adminPassword, setAdminPassword] = useState('');
+  const [selectedAdminEmail, setSelectedAdminEmail] = useState<'gcrtech.raja@gmail.com' | 'mrraavana07@gmail.com'>('gcrtech.raja@gmail.com');
   const [adminError, setAdminError] = useState<string | null>(null);
   const [adminVerifying, setAdminVerifying] = useState(false);
-  const [showAdminPasswordText, setShowAdminPasswordText] = useState(false);
 
-  // Clear existing recaptcha verifier
-  const clearExistingRecaptcha = (containerId: string = 'recaptcha-container') => {
-    if ((window as any).recaptchaVerifier) {
-      try {
-        (window as any).recaptchaVerifier.clear();
-      } catch (e) {
-        console.warn('Error clearing recaptchaVerifier in LoginPage:', e);
-      }
-      (window as any).recaptchaVerifier = null;
-    }
-    const container = document.getElementById(containerId);
-    if (container) {
-      container.innerHTML = '';
-    }
+  // Email format validation helper
+  const isValidEmail = (val: string): boolean => {
+    const re = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    return re.test(val.trim());
   };
 
-  // Initialize invisible reCAPTCHA on component mount
-  useEffect(() => {
-    clearExistingRecaptcha('recaptcha-container');
-
-    try {
-      const verifier = new RecaptchaVerifier(auth, 'recaptcha-container', {
-        size: 'invisible',
-        callback: () => {},
-        'expired-callback': () => {
-          clearExistingRecaptcha('recaptcha-container');
-        }
-      });
-
-      verifier.render().catch((err: any) => {
-        console.warn('LoginPage recaptchaVerifier render warning:', err);
-      });
-
-      (window as any).recaptchaVerifier = verifier;
-    } catch (err: any) {
-      console.warn('Failed to initialize recaptchaVerifier on LoginPage mount:', err);
-    }
-
-    return () => {
-      clearExistingRecaptcha('recaptcha-container');
-    };
-  }, []);
-
-  // Countdown timer for Resend OTP
-  useEffect(() => {
-    let timer: NodeJS.Timeout;
-    if (countdown > 0) {
-      timer = setInterval(() => {
-        setCountdown((prev) => prev - 1);
-      }, 1000);
-    }
-    return () => {
-      if (timer) clearInterval(timer);
-    };
-  }, [countdown]);
-
-  // Clean formatted phone number with country code
-  const getFullPhoneNumber = () => {
-    const digitsOnly = phoneNumber.replace(/[^0-9]/g, '');
-    return `${countryCode}${digitsOnly}`;
+  // Reset errors when switching tabs
+  const handleTabChange = (tab: 'signup' | 'login') => {
+    setActiveTab(tab);
+    setErrorMsg(null);
+    setInfoMsg(null);
+    setIsForgotPassword(false);
   };
 
-  // Validate registration inputs
-  const validateRegistrationFields = (): boolean => {
+  // 1. Submit Create Account Form (Supabase Auth)
+  const handleSignUpSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setErrorMsg(null);
+    setInfoMsg(null);
+
+    // Validation 1: Name required
     if (!name.trim()) {
-      setErrorMsg('Please enter your name.');
-      return false;
-    }
-    if (Number(age) < 18) {
-      setErrorMsg('You must be at least 18 years old to join Meet Up.');
-      return false;
-    }
-    if (!confirm18) {
-      setErrorMsg('Please confirm you are at least 18 years old.');
-      return false;
-    }
-    return true;
-  };
-
-  // 1. Send OTP Handler
-  const handleSendOtp = async (e?: React.FormEvent) => {
-    if (e) e.preventDefault();
-    setErrorMsg(null);
-    setInfoMsg(null);
-
-    const rawDigits = phoneNumber.replace(/[^0-9]/g, '');
-    if (!rawDigits || rawDigits.length < 8) {
-      setErrorMsg('Please enter a valid mobile number.');
+      setErrorMsg('Please enter your full name.');
       return;
     }
 
-    if (mode === 'register' && !validateRegistrationFields()) {
+    // Validation 2: Email format
+    if (!isValidEmail(email)) {
+      setErrorMsg('Please enter a valid email address (e.g. name@example.com).');
       return;
     }
 
-    const fullPhone = getFullPhoneNumber();
+    // Validation 3: Password minimum 6 characters
+    if (password.length < 6) {
+      setErrorMsg('Password must be at least 6 characters long.');
+      return;
+    }
+
+    // Validation 4: Passwords match
+    if (password !== confirmPassword) {
+      setErrorMsg('Passwords do not match. Please verify your password.');
+      return;
+    }
+
     setSubmitting(true);
-
     try {
-      const confResult = await sendPhoneOtp(fullPhone, 'recaptcha-container');
-      setConfirmationResult(confResult);
-      setPhoneStep('verify_otp');
-      setCountdown(30);
-      setInfoMsg(`OTP code sent to ${fullPhone}`);
-    } catch (err: any) {
-      console.error('Failed to send phone OTP:', err);
-      setErrorMsg(err.message || 'Failed to send OTP. Please try again.');
-    } finally {
-      setSubmitting(false);
-    }
-  };
+      const res = await signUpWithSupabaseAuth({
+        name: name.trim(),
+        email: email.trim(),
+        pass: password,
+      });
 
-  // 2. Resend OTP Handler
-  const handleResendOtp = async () => {
-    if (countdown > 0 || resending) return;
-    setErrorMsg(null);
-    setInfoMsg(null);
-    setResending(true);
-
-    const fullPhone = getFullPhoneNumber();
-    try {
-      const confResult = await sendPhoneOtp(fullPhone, 'recaptcha-container');
-      setConfirmationResult(confResult);
-      setCountdown(30);
-      setInfoMsg(`A fresh OTP code has been resent to ${fullPhone}`);
-    } catch (err: any) {
-      console.error('Failed to resend phone OTP:', err);
-      setErrorMsg(err.message || 'Could not resend OTP. Please try again.');
-    } finally {
-      setResending(false);
-    }
-  };
-
-  // 3. Verify OTP Handler
-  const handleVerifyOtp = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setErrorMsg(null);
-    setInfoMsg(null);
-
-    const cleanOtp = otpCode.trim().replace(/\s+/g, '');
-    if (!cleanOtp || cleanOtp.length !== 6) {
-      setErrorMsg('Please enter the 6-digit OTP code.');
-      return;
-    }
-
-    if (!confirmationResult) {
-      setErrorMsg('Session expired. Please request a new OTP code.');
-      setPhoneStep('enter_phone');
-      return;
-    }
-
-    const fullPhone = getFullPhoneNumber();
-    setSubmitting(true);
-
-    try {
-      if (mode === 'login') {
-        await verifyPhoneLogin(confirmationResult, cleanOtp, fullPhone);
+      if (res.needsEmailConfirmation) {
+        setInfoMsg('Account created successfully! If email confirmation is enabled on your Supabase project, please check your inbox to confirm.');
+        setActiveTab('login');
       } else {
-        await verifyPhoneRegister(confirmationResult, cleanOtp, {
-          phone: fullPhone,
-          name: name.trim(),
-          age: Number(age),
-          gender,
-          location: location.trim() || 'Chennai, Tamil Nadu',
-          bio: bio.trim(),
-          interests: ['Dating', 'Conversations', 'Music'],
-          role: accountType,
-        });
-      }
-
-      if (onLoginSuccess) {
-        onLoginSuccess();
+        setInfoMsg('Account created successfully! Redirecting...');
+        if (onLoginSuccess) {
+          onLoginSuccess();
+        }
       }
     } catch (err: any) {
-      console.error('OTP verification error:', err);
-      setErrorMsg(err.message || 'Invalid verification code. Please check and try again.');
+      console.error('Sign up error:', err);
+      setErrorMsg(err.message || 'Failed to create account. Please try again.');
     } finally {
       setSubmitting(false);
     }
   };
 
-  // 4. Email Auth Handler
-  const handleEmailSubmit = async (e: React.FormEvent) => {
+  // 2. Submit Login Form (Supabase Auth)
+  const handleLoginSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMsg(null);
     setInfoMsg(null);
 
-    const trimmedEmail = email.trim().toLowerCase();
-    if (!trimmedEmail) {
+    // Validation: Email format
+    if (!isValidEmail(email)) {
       setErrorMsg('Please enter a valid email address.');
       return;
     }
-    if (!password || password.length < 6) {
-      setErrorMsg('Password must be at least 6 characters.');
-      return;
-    }
 
-    if (mode === 'register' && !validateRegistrationFields()) {
+    // Validation: Password required
+    if (!password) {
+      setErrorMsg('Please enter your password.');
       return;
     }
 
     setSubmitting(true);
     try {
-      if (mode === 'login') {
-        await login(trimmedEmail, password);
-      } else {
-        await register({
-          email: trimmedEmail,
-          pass: password,
-          name: name.trim(),
-          age: Number(age),
-          gender,
-          location: location.trim() || 'Tamil Nadu, India',
-          bio: bio.trim(),
-          role: accountType,
-        });
-      }
-
+      await signInWithSupabaseAuth(email.trim(), password);
+      setInfoMsg('Login successful! Redirecting...');
       if (onLoginSuccess) {
         onLoginSuccess();
       }
     } catch (err: any) {
-      console.error('Email authentication error:', err);
-      setErrorMsg(err.message || 'Authentication failed. Please verify credentials.');
+      console.error('Login error:', err);
+      const msg = err.message || '';
+      if (
+        msg.includes('Invalid email or password') ||
+        msg.includes('invalid login credentials') ||
+        msg.includes('invalid_grant') ||
+        msg.includes('wrong password')
+      ) {
+        setErrorMsg('Invalid email or password. Please check your credentials and try again.');
+      } else if (msg.includes('No account found') || msg.includes('user not found')) {
+        setErrorMsg('No account found with this email. Please click "Create Account" to register.');
+      } else {
+        setErrorMsg(err.message || 'Login failed. Please check your credentials.');
+      }
     } finally {
       setSubmitting(false);
     }
   };
 
-  // 5. Google Sign In Handler
+  // 3. Submit Forgot Password Form (Supabase Auth)
+  const handleForgotPasswordSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setErrorMsg(null);
+    setInfoMsg(null);
+
+    if (!isValidEmail(forgotEmail)) {
+      setErrorMsg('Please enter a valid email address to receive reset instructions.');
+      return;
+    }
+
+    setSubmitting(true);
+    try {
+      await resetPasswordForEmail(forgotEmail.trim());
+      setForgotSubmitted(true);
+      setInfoMsg('Password reset instructions have been sent to your email.');
+    } catch (err: any) {
+      console.error('Forgot password error:', err);
+      setErrorMsg(err.message || 'Failed to send password reset email. Please try again.');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  // Google Sign In fallback
   const handleGoogleSignIn = async () => {
     setErrorMsg(null);
     setInfoMsg(null);
     setSubmitting(true);
     try {
       await loginWithGoogle();
-      if (onLoginSuccess) onLoginSuccess();
+      if (onLoginSuccess) {
+        onLoginSuccess();
+      }
     } catch (err: any) {
-      console.error(err);
-      setErrorMsg(err.message || 'Google sign-in could not be completed.');
+      console.error('Google sign in error:', err);
+      setErrorMsg(err.message || 'Google sign-in was cancelled or failed.');
     } finally {
       setSubmitting(false);
     }
   };
 
-  // 6. Super Admin Password Handler
-  const handleAdminSubmit = async (e: React.FormEvent) => {
+  // Super Admin secret login
+  const handleSuperAdminLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setAdminError(null);
-
-    if (adminPassword !== 'Raja@2026') {
-      setAdminError('Access Denied: Incorrect Super Admin Password.');
-      return;
-    }
-
     setAdminVerifying(true);
     try {
-      await loginAsSuperAdmin(adminPassword);
+      await loginAsSuperAdmin(adminPassword, selectedAdminEmail);
       setShowAdminModal(false);
-      if (onLoginSuccess) onLoginSuccess();
+      if (onLoginSuccess) {
+        onLoginSuccess();
+      }
     } catch (err: any) {
-      setAdminError(err.message || 'Access Denied: Incorrect Super Admin Password.');
+      setAdminError(err.message || 'Incorrect Super Admin password');
     } finally {
       setAdminVerifying(false);
     }
   };
 
-  // Preset demo test number filler: "99765 43210" as shown in the screenshot
-  const handleUseDemoNumber = () => {
-    setCountryCode('+91');
-    setPhoneNumber('9976543210');
-    setErrorMsg(null);
-    setInfoMsg('Demo number filled: +91 99765 43210');
-  };
-
   return (
-    <div className="min-h-screen bg-[#0A0A0A] text-white flex flex-col items-center justify-between p-4 sm:p-6 relative overflow-hidden selection:bg-[#FF6BA9]/30 selection:text-[#FF6BA9]">
+    <div className="min-h-screen bg-[#0A0A0A] flex flex-col items-center justify-between p-4 sm:p-6 relative overflow-hidden text-center select-none font-sans">
       
-      {/* 1. TOP: FLOATING PINK HEARTS ANIMATION IN BACKGROUND */}
+      {/* Floating Hearts Animated Background */}
       <div className="absolute inset-0 pointer-events-none overflow-hidden z-0">
-        {/* Soft top-down radial pink ambient glow */}
-        <div 
-          className="absolute top-0 left-1/2 -translate-x-1/2 w-[130%] sm:w-[600px] h-[340px] pointer-events-none"
-          style={{
-            background: 'radial-gradient(ellipse 70% 50% at 50% 0%, rgba(255, 107, 169, 0.22), transparent 75%)',
-          }}
-        />
-
+        <style>{`
+          @keyframes floatHeart {
+            0% {
+              transform: translateY(105vh) scale(0.8) rotate(0deg);
+              opacity: 0;
+            }
+            15% {
+              opacity: 0.65;
+            }
+            50% {
+              transform: translateY(50vh) scale(1.1) rotate(15deg);
+              opacity: 0.8;
+            }
+            85% {
+              opacity: 0.4;
+            }
+            100% {
+              transform: translateY(-10vh) scale(0.9) rotate(-15deg);
+              opacity: 0;
+            }
+          }
+          .floating-heart {
+            position: absolute;
+            animation: floatHeart linear infinite;
+            will-change: transform, opacity;
+          }
+        `}</style>
         {FLOATING_HEARTS.map((h) => (
           <div
             key={h.id}
-            className="absolute animate-float-heart"
+            className="floating-heart"
             style={{
               left: h.left,
               bottom: '-30px',
@@ -410,13 +307,10 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess }) => {
         ))}
       </div>
 
-      {/* Recaptcha Container for Firebase Phone Auth */}
-      <div id="recaptcha-container"></div>
-
-      {/* Main Content Column (Max width 420px for true mobile fidelity) */}
+      {/* Main Content Column */}
       <div className="w-full max-w-[420px] z-10 flex flex-col items-center my-auto pt-2 pb-6">
 
-        {/* 2. CENTER LOGO: Circular logo with neon pink border and green online dot */}
+        {/* Center Logo with Neon Pink Border and Online Dot */}
         <div 
           className="relative mb-3 cursor-pointer group"
           onDoubleClick={() => setShowAdminModal(true)}
@@ -429,15 +323,14 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess }) => {
               className="w-full h-full rounded-full object-cover bg-black"
             />
           </div>
-          {/* Small green online dot at bottom-right */}
+          {/* Green online dot */}
           <div className="absolute bottom-1 right-1 w-[18px] h-[18px] rounded-full bg-[#10B981] border-[2.5px] border-[#0A0A0A] shadow-[0_0_8px_#10B981] flex items-center justify-center">
             <span className="w-1.5 h-1.5 rounded-full bg-white/90"></span>
           </div>
         </div>
 
-        {/* 3. TITLE: "Meet Up" in large white serif font with neon pink hearts left and right */}
+        {/* Brand Title */}
         <div className="flex items-center justify-center gap-3 mb-1">
-          {/* Left twin neon hearts */}
           <span className="text-[#FF6BA9] inline-flex items-center drop-shadow-[0_0_8px_rgba(255,107,169,0.85)]">
             <svg width="28" height="22" viewBox="0 0 32 24" fill="none" stroke="#FF6BA9" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
               <path d="M12 18.5l-1.1-1C5 13 2 10.5 2 7.2 2 4.5 4 2.5 6.7 2.5c1.5 0 3 .7 4 1.8 1-1.1 2.5-1.8 4-1.8 2.7 0 4.7 2 4.7 4.7 0 3.3-3 5.8-8.9 10.3L12 18.5z" />
@@ -449,7 +342,6 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess }) => {
             Meet Up
           </h1>
 
-          {/* Right pink dot + twin neon hearts */}
           <div className="flex items-center gap-2">
             <span className="w-2.5 h-2.5 rounded-full bg-[#FF6BA9] shadow-[0_0_8px_#FF6BA9]"></span>
             <span className="text-[#FF6BA9] inline-flex items-center drop-shadow-[0_0_8px_rgba(255,107,169,0.85)]">
@@ -461,287 +353,325 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess }) => {
           </div>
         </div>
 
-        {/* 4. SUBTITLE: "Sign in to continue" in grey */}
-        <p className="text-zinc-400 text-sm font-normal mb-6">
-          {phoneStep === 'verify_otp' 
-            ? 'Enter the 6-digit code sent to your phone'
-            : mode === 'register' 
-              ? 'Create an account to continue' 
-              : 'Sign in to continue'}
+        {/* Subtitle */}
+        <p className="text-zinc-400 text-sm font-normal mb-5">
+          {isForgotPassword 
+            ? 'Reset your account password' 
+            : activeTab === 'signup' 
+              ? 'Create a new account with email' 
+              : 'Sign in with your email & password'}
         </p>
 
-        {/* Informational or Error feedback banner */}
+        {/* Error Feedback Banner */}
         {errorMsg && (
-          <div className="w-full p-3 mb-4 rounded-2xl bg-red-500/15 border border-red-500/40 text-red-200 text-xs flex items-center gap-2.5 animate-in fade-in">
-            <span className="w-2 h-2 rounded-full bg-red-400 shrink-0"></span>
+          <div className="w-full p-3 mb-4 rounded-2xl bg-red-500/15 border border-red-500/40 text-red-200 text-xs flex items-center gap-2.5 animate-in fade-in text-left">
+            <AlertCircle className="w-4 h-4 text-red-400 shrink-0" />
             <span className="leading-relaxed flex-1">{errorMsg}</span>
           </div>
         )}
+
+        {/* Success Feedback Banner */}
         {infoMsg && (
-          <div className="w-full p-3 mb-4 rounded-2xl bg-[#FF6BA9]/15 border border-[#FF6BA9]/40 text-pink-200 text-xs flex items-center gap-2.5 animate-in fade-in">
-            <CheckCircle2 className="w-4 h-4 shrink-0 text-[#FF6BA9]" />
+          <div className="w-full p-3 mb-4 rounded-2xl bg-[#FF6BA9]/15 border border-[#FF6BA9]/40 text-pink-200 text-xs flex items-center gap-2.5 animate-in fade-in text-left">
+            <CheckCircle2 className="w-4 h-4 text-[#FF6BA9] shrink-0" />
             <span className="leading-relaxed flex-1">{infoMsg}</span>
           </div>
         )}
 
-        {/* 5. TWO PINK BUTTONS SIDE-BY-SIDE: "Sign In" and "Create Account" */}
-        {phoneStep === 'enter_phone' && (
-          <div className="w-full grid grid-cols-2 gap-3 mb-6">
+        {/* Requirement 2: Auth screen should have 2 tabs: Create Account and Login */}
+        {!isForgotPassword && (
+          <div className="w-full grid grid-cols-2 gap-2 p-1.5 mb-5 rounded-2xl bg-[#121217] border border-zinc-800">
             <button
               type="button"
-              onClick={() => {
-                setMode('login');
-                setErrorMsg(null);
-              }}
-              className={`py-3.5 px-4 rounded-2xl sm:rounded-3xl font-serif text-base font-semibold transition-all duration-200 cursor-pointer ${
-                mode === 'login'
-                  ? 'bg-[#FF6BA9] text-white shadow-[0_4px_22px_rgba(255,107,169,0.55)] scale-[1.01]'
-                  : 'bg-[#FF6BA9]/80 text-white hover:bg-[#FF6BA9] opacity-90'
+              onClick={() => handleTabChange('signup')}
+              className={`py-3 px-3 rounded-xl font-serif text-sm font-semibold transition-all duration-200 cursor-pointer flex items-center justify-center gap-1.5 ${
+                activeTab === 'signup'
+                  ? 'bg-[#FF6BA9] text-white shadow-[0_2px_16px_rgba(255,107,169,0.5)] scale-[1.01]'
+                  : 'text-zinc-400 hover:text-white hover:bg-zinc-800/50'
               }`}
             >
-              Sign In
+              <span>Create Account</span>
             </button>
+
             <button
               type="button"
-              onClick={() => {
-                setMode('register');
-                setErrorMsg(null);
-              }}
-              className={`py-3.5 px-4 rounded-2xl sm:rounded-3xl font-serif text-base font-semibold transition-all duration-200 cursor-pointer ${
-                mode === 'register'
-                  ? 'bg-[#FF6BA9] text-white shadow-[0_4px_22px_rgba(255,107,169,0.55)] scale-[1.01]'
-                  : 'bg-[#FF6BA9]/80 text-white hover:bg-[#FF6BA9] opacity-90'
+              onClick={() => handleTabChange('login')}
+              className={`py-3 px-3 rounded-xl font-serif text-sm font-semibold transition-all duration-200 cursor-pointer flex items-center justify-center gap-1.5 ${
+                activeTab === 'login'
+                  ? 'bg-[#FF6BA9] text-white shadow-[0_2px_16px_rgba(255,107,169,0.5)] scale-[1.01]'
+                  : 'text-zinc-400 hover:text-white hover:bg-zinc-800/50'
               }`}
             >
-              Create Account
+              <span>Login</span>
             </button>
           </div>
         )}
 
         {/* ============================================================ */}
-        {/* STEP A: ENTER PHONE / REGISTER / EMAIL FORM                  */}
+        {/* TAB 1: CREATE ACCOUNT (Requirement 3)                         */}
+        {/* Fields: Name, Email, Password, Confirm Password              */}
         {/* ============================================================ */}
-        {phoneStep === 'enter_phone' && (
-          <div className="w-full space-y-4">
-
-            {/* 6. TWO TOGGLE PILLS: "Mobile Number" (selected with pink icon) and "Email ID" */}
-            <div className="grid grid-cols-2 gap-3 mb-1">
-              <button
-                type="button"
-                onClick={() => {
-                  setAuthMethod('phone');
-                  setErrorMsg(null);
-                }}
-                className={`py-2.5 px-4 rounded-full flex items-center justify-center gap-2 text-xs font-medium transition cursor-pointer border ${
-                  authMethod === 'phone'
-                    ? 'border-[#FF6BA9] bg-[#16161F] text-white shadow-[0_0_12px_rgba(255,107,169,0.25)]'
-                    : 'border-zinc-800 bg-[#121217] text-zinc-400 hover:text-zinc-200'
-                }`}
-              >
-                <PhoneCall className={`w-3.5 h-3.5 ${authMethod === 'phone' ? 'text-[#FF6BA9]' : 'text-zinc-500'}`} />
-                <span>Mobile Number</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => {
-                  setAuthMethod('email');
-                  setErrorMsg(null);
-                }}
-                className={`py-2.5 px-4 rounded-full flex items-center justify-center gap-2 text-xs font-medium transition cursor-pointer border ${
-                  authMethod === 'email'
-                    ? 'border-[#FF6BA9] bg-[#16161F] text-white shadow-[0_0_12px_rgba(255,107,169,0.25)]'
-                    : 'border-zinc-800 bg-[#121217] text-zinc-400 hover:text-zinc-200'
-                }`}
-              >
-                <Mail className={`w-3.5 h-3.5 ${authMethod === 'email' ? 'text-[#FF6BA9]' : 'text-zinc-500'}`} />
-                <span>Email ID</span>
-              </button>
+        {!isForgotPassword && activeTab === 'signup' && (
+          <form onSubmit={handleSignUpSubmit} className="w-full space-y-3.5 animate-in fade-in">
+            {/* Field 1: Name */}
+            <div className="text-left">
+              <label className="text-xs font-semibold text-zinc-300 block mb-1.5">
+                Full Name
+              </label>
+              <div className="flex items-center rounded-2xl border-2 border-[#FF6BA9]/80 focus-within:border-[#FF6BA9] bg-[#121217] px-3.5 py-3 gap-2.5 transition shadow-[0_0_12px_rgba(255,107,169,0.12)]">
+                <User className="w-4 h-4 text-[#FF6BA9] shrink-0" />
+                <input
+                  type="text"
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  placeholder="Enter your full name"
+                  className="w-full bg-transparent text-sm font-medium text-white placeholder:text-zinc-500 focus:outline-none"
+                  required
+                />
+              </div>
             </div>
 
-            {/* Extra fields if "Create Account" mode is chosen */}
-            {mode === 'register' && (
-              <div className="p-3.5 rounded-2xl bg-[#121217] border border-zinc-800/90 space-y-3 animate-in fade-in">
-                <div>
-                  <label className="text-xs text-zinc-300 font-medium block mb-1">Full Name</label>
-                  <div className="relative">
-                    <User className="w-4 h-4 text-zinc-500 absolute left-3.5 top-3" />
-                    <input
-                      type="text"
-                      value={name}
-                      onChange={(e) => setName(e.target.value)}
-                      placeholder="e.g. Maya"
-                      className="w-full bg-[#0A0A0A] border border-zinc-800 rounded-xl pl-10 pr-3 py-2 text-xs text-white placeholder:text-zinc-600 focus:outline-none focus:border-[#FF6BA9]"
-                      required
-                    />
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-2 gap-2.5">
-                  <div>
-                    <label className="text-xs text-zinc-300 font-medium block mb-1">Age (18+)</label>
-                    <input
-                      type="number"
-                      min="18"
-                      max="99"
-                      value={age}
-                      onChange={(e) => setAge(Number(e.target.value))}
-                      className="w-full bg-[#0A0A0A] border border-zinc-800 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-[#FF6BA9]"
-                      required
-                    />
-                  </div>
-                  <div>
-                    <label className="text-xs text-zinc-300 font-medium block mb-1">I want to join as</label>
-                    <select
-                      value={accountType}
-                      onChange={(e) => setAccountType(e.target.value as any)}
-                      className="w-full bg-[#0A0A0A] border border-zinc-800 rounded-xl px-2.5 py-2 text-xs text-white focus:outline-none focus:border-[#FF6BA9]"
-                    >
-                      <option value="user">Caller / User</option>
-                      <option value="listener">🎧 Listener</option>
-                    </select>
-                  </div>
-                </div>
-
-                <div className="flex items-start gap-2 pt-1">
-                  <input
-                    type="checkbox"
-                    id="chk-18"
-                    checked={confirm18}
-                    onChange={(e) => setConfirm18(e.target.checked)}
-                    className="mt-0.5 rounded border-zinc-700 bg-zinc-900 text-[#FF6BA9] focus:ring-[#FF6BA9]"
-                  />
-                  <label htmlFor="chk-18" className="text-[11px] text-zinc-400 cursor-pointer select-none">
-                    I confirm I am at least <strong className="text-zinc-200">18 years of age</strong> and accept community guidelines.
-                  </label>
-                </div>
+            {/* Field 2: Email */}
+            <div className="text-left">
+              <label className="text-xs font-semibold text-zinc-300 block mb-1.5">
+                Email Address
+              </label>
+              <div className="flex items-center rounded-2xl border-2 border-[#FF6BA9]/80 focus-within:border-[#FF6BA9] bg-[#121217] px-3.5 py-3 gap-2.5 transition shadow-[0_0_12px_rgba(255,107,169,0.12)]">
+                <Mail className="w-4 h-4 text-[#FF6BA9] shrink-0" />
+                <input
+                  type="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  placeholder="name@example.com"
+                  className="w-full bg-transparent text-sm font-medium text-white placeholder:text-zinc-500 focus:outline-none"
+                  required
+                />
               </div>
-            )}
+            </div>
 
-            {/* FLOW 1: MOBILE NUMBER AUTH (Default as in screenshot) */}
-            {authMethod === 'phone' ? (
-              <form onSubmit={handleSendOtp} className="space-y-2">
-                {/* 7. LABEL: "Mobile Number" */}
-                <div className="text-left">
-                  <label className="text-xs font-semibold text-zinc-300 block mb-1.5">
-                    Mobile Number
-                  </label>
+            {/* Field 3: Password with Show/Hide Toggle (Requirement 5) */}
+            <div className="text-left">
+              <label className="text-xs font-semibold text-zinc-300 block mb-1.5">
+                Password <span className="text-zinc-500 font-normal">(min 6 characters)</span>
+              </label>
+              <div className="flex items-center rounded-2xl border-2 border-[#FF6BA9]/80 focus-within:border-[#FF6BA9] bg-[#121217] px-3.5 py-3 gap-2.5 transition shadow-[0_0_12px_rgba(255,107,169,0.12)]">
+                <Lock className="w-4 h-4 text-[#FF6BA9] shrink-0" />
+                <input
+                  type={showPassword ? 'text' : 'password'}
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  placeholder="Create a password"
+                  className="w-full bg-transparent text-sm font-medium text-white placeholder:text-zinc-500 focus:outline-none"
+                  required
+                  minLength={6}
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword(!showPassword)}
+                  className="text-zinc-400 hover:text-zinc-200 transition p-1 cursor-pointer"
+                  title={showPassword ? 'Hide password' : 'Show password'}
+                >
+                  {showPassword ? <EyeOff className="w-4 h-4 text-[#FF6BA9]" /> : <Eye className="w-4 h-4" />}
+                </button>
+              </div>
+            </div>
 
-                  {/* 8. PHONE INPUT: Left box "+91 India", Right box with phone icon and "99765 43210", pink border, dark fill */}
-                  <div className="flex items-center rounded-2xl border-2 border-[#FF6BA9] bg-[#121217] overflow-hidden shadow-[0_0_15px_rgba(255,107,169,0.15)] focus-within:shadow-[0_0_20px_rgba(255,107,169,0.3)] transition">
-                    {/* Left box: +91 India with country selector */}
-                    <div className="relative border-r border-zinc-800 shrink-0">
-                      <select
-                        value={countryCode}
-                        onChange={(e) => setCountryCode(e.target.value)}
-                        className="bg-transparent text-white text-xs font-medium pl-3 pr-6 py-3 appearance-none focus:outline-none cursor-pointer"
-                      >
-                        {COUNTRY_OPTIONS.map((c) => (
-                          <option key={c.code} value={c.code} className="bg-[#121217] text-white">
-                            {c.label}
-                          </option>
-                        ))}
-                      </select>
-                      <span className="absolute right-2 top-1/2 -translate-y-1/2 text-[10px] text-zinc-500 pointer-events-none">▼</span>
-                    </div>
+            {/* Field 4: Confirm Password with Show/Hide Toggle */}
+            <div className="text-left">
+              <label className="text-xs font-semibold text-zinc-300 block mb-1.5">
+                Confirm Password
+              </label>
+              <div className="flex items-center rounded-2xl border-2 border-[#FF6BA9]/80 focus-within:border-[#FF6BA9] bg-[#121217] px-3.5 py-3 gap-2.5 transition shadow-[0_0_12px_rgba(255,107,169,0.12)]">
+                <Lock className="w-4 h-4 text-[#FF6BA9] shrink-0" />
+                <input
+                  type={showConfirmPassword ? 'text' : 'password'}
+                  value={confirmPassword}
+                  onChange={(e) => setConfirmPassword(e.target.value)}
+                  placeholder="Re-enter password"
+                  className="w-full bg-transparent text-sm font-medium text-white placeholder:text-zinc-500 focus:outline-none"
+                  required
+                  minLength={6}
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowConfirmPassword(!showConfirmPassword)}
+                  className="text-zinc-400 hover:text-zinc-200 transition p-1 cursor-pointer"
+                  title={showConfirmPassword ? 'Hide password' : 'Show password'}
+                >
+                  {showConfirmPassword ? <EyeOff className="w-4 h-4 text-[#FF6BA9]" /> : <Eye className="w-4 h-4" />}
+                </button>
+              </div>
+            </div>
 
-                    {/* Right box: phone icon and "99765 43210" */}
-                    <div className="flex-1 flex items-center px-3 py-2.5 gap-2.5">
-                      <PhoneCall className="w-4 h-4 text-[#FF6BA9] shrink-0" />
-                      <input
-                        type="tel"
-                        value={phoneNumber}
-                        onChange={(e) => setPhoneNumber(e.target.value)}
-                        placeholder="99765 43210"
-                        className="w-full bg-transparent text-sm font-medium text-white placeholder:text-zinc-500 focus:outline-none tracking-wider"
-                        required
-                      />
-                    </div>
-                  </div>
-                </div>
+            {/* Terms & Privacy Notice */}
+            <p className="text-[11px] text-zinc-400 text-left pt-1">
+              By creating an account, you agree to our{' '}
+              <button
+                type="button"
+                onClick={() => setShowPrivacyModal(true)}
+                className="text-[#FF6BA9] hover:underline cursor-pointer inline"
+              >
+                Terms & Privacy Policy
+              </button>
+              .
+            </p>
 
-                {/* 9. RIGHT-ALIGNED SMALL TEXT: "Use demo number" in pink */}
-                <div className="flex justify-end pt-1">
-                  <button
-                    type="button"
-                    onClick={handleUseDemoNumber}
-                    className="text-[#FF6BA9] text-xs font-medium hover:underline cursor-pointer transition"
-                  >
-                    Use demo number
-                  </button>
-                </div>
+            {/* Submit Button */}
+            <div className="pt-2">
+              <button
+                type="submit"
+                disabled={submitting}
+                className="w-full py-3.5 px-6 rounded-2xl sm:rounded-3xl bg-[#FF6BA9] hover:bg-[#FF7FB7] active:scale-[0.99] text-white font-serif text-base font-bold shadow-[0_6px_28px_rgba(255,107,169,0.5)] transition flex items-center justify-center gap-2 cursor-pointer disabled:opacity-60"
+              >
+                <span>{submitting ? 'Creating Account...' : 'Create Account'}</span>
+                <ArrowRight className="w-5 h-5 text-white" />
+              </button>
+            </div>
+          </form>
+        )}
 
-                {/* 10. BIG PINK BUTTON: "Send OTP" with arrow icon on right */}
-                <div className="pt-2">
-                  <button
-                    type="submit"
-                    disabled={submitting}
-                    className="w-full py-3.5 px-6 rounded-2xl sm:rounded-3xl bg-[#FF6BA9] hover:bg-[#FF7FB7] active:scale-[0.99] text-white font-serif text-base font-bold shadow-[0_6px_28px_rgba(255,107,169,0.5)] transition flex items-center justify-center gap-2 cursor-pointer disabled:opacity-60"
-                  >
-                    <span>{submitting ? 'Sending OTP...' : 'Send OTP'}</span>
-                    <ArrowRight className="w-5 h-5 text-white" />
-                  </button>
-                </div>
-              </form>
-            ) : (
-              /* FLOW 2: EMAIL & PASSWORD AUTH */
-              <form onSubmit={handleEmailSubmit} className="space-y-3">
-                <div className="text-left">
-                  <label className="text-xs font-semibold text-zinc-300 block mb-1.5">
-                    Email Address
-                  </label>
-                  <div className="flex items-center rounded-2xl border-2 border-[#FF6BA9] bg-[#121217] px-3.5 py-2.5 gap-2.5">
-                    <Mail className="w-4 h-4 text-[#FF6BA9] shrink-0" />
-                    <input
-                      type="email"
-                      value={email}
-                      onChange={(e) => setEmail(e.target.value)}
-                      placeholder="name@example.com"
-                      className="w-full bg-transparent text-xs font-medium text-white placeholder:text-zinc-500 focus:outline-none"
-                      required
-                    />
-                  </div>
-                </div>
+        {/* ============================================================ */}
+        {/* TAB 2: LOGIN (Requirement 4)                                  */}
+        {/* Fields: Email, Password, Forgot Password link                */}
+        {/* ============================================================ */}
+        {!isForgotPassword && activeTab === 'login' && (
+          <form onSubmit={handleLoginSubmit} className="w-full space-y-3.5 animate-in fade-in">
+            {/* Field 1: Email */}
+            <div className="text-left">
+              <label className="text-xs font-semibold text-zinc-300 block mb-1.5">
+                Email Address
+              </label>
+              <div className="flex items-center rounded-2xl border-2 border-[#FF6BA9]/80 focus-within:border-[#FF6BA9] bg-[#121217] px-3.5 py-3 gap-2.5 transition shadow-[0_0_12px_rgba(255,107,169,0.12)]">
+                <Mail className="w-4 h-4 text-[#FF6BA9] shrink-0" />
+                <input
+                  type="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  placeholder="name@example.com"
+                  className="w-full bg-transparent text-sm font-medium text-white placeholder:text-zinc-500 focus:outline-none"
+                  required
+                />
+              </div>
+            </div>
 
-                <div className="text-left">
-                  <label className="text-xs font-semibold text-zinc-300 block mb-1.5">
-                    Password
-                  </label>
-                  <div className="flex items-center rounded-2xl border-2 border-[#FF6BA9] bg-[#121217] px-3.5 py-2.5 gap-2.5">
-                    <Lock className="w-4 h-4 text-[#FF6BA9] shrink-0" />
-                    <input
-                      type={showPassword ? 'text' : 'password'}
-                      value={password}
-                      onChange={(e) => setPassword(e.target.value)}
-                      placeholder="Enter password"
-                      className="w-full bg-transparent text-xs font-medium text-white placeholder:text-zinc-500 focus:outline-none"
-                      required
-                    />
-                    <button
-                      type="button"
-                      onClick={() => setShowPassword(!showPassword)}
-                      className="text-zinc-500 hover:text-zinc-300"
-                    >
-                      {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                    </button>
-                  </div>
-                </div>
+            {/* Field 2: Password with Show/Hide Toggle (Requirement 5) */}
+            <div className="text-left">
+              <div className="flex items-center justify-between mb-1.5">
+                <label className="text-xs font-semibold text-zinc-300">
+                  Password
+                </label>
+                {/* Requirement 6: Forgot Password link */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setForgotEmail(email);
+                    setIsForgotPassword(true);
+                    setErrorMsg(null);
+                    setInfoMsg(null);
+                  }}
+                  className="text-xs text-[#FF6BA9] hover:underline transition cursor-pointer"
+                >
+                  Forgot Password?
+                </button>
+              </div>
 
-                <div className="pt-2">
-                  <button
-                    type="submit"
-                    disabled={submitting}
-                    className="w-full py-3.5 px-6 rounded-2xl sm:rounded-3xl bg-[#FF6BA9] hover:bg-[#FF7FB7] text-white font-serif text-base font-bold shadow-[0_6px_28px_rgba(255,107,169,0.5)] transition flex items-center justify-center gap-2 cursor-pointer disabled:opacity-60"
-                  >
-                    <span>{submitting ? 'Authenticating...' : mode === 'register' ? 'Create Account' : 'Sign In'}</span>
-                    <ArrowRight className="w-5 h-5 text-white" />
-                  </button>
-                </div>
-              </form>
-            )}
+              <div className="flex items-center rounded-2xl border-2 border-[#FF6BA9]/80 focus-within:border-[#FF6BA9] bg-[#121217] px-3.5 py-3 gap-2.5 transition shadow-[0_0_12px_rgba(255,107,169,0.12)]">
+                <Lock className="w-4 h-4 text-[#FF6BA9] shrink-0" />
+                <input
+                  type={showPassword ? 'text' : 'password'}
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  placeholder="Enter your password"
+                  className="w-full bg-transparent text-sm font-medium text-white placeholder:text-zinc-500 focus:outline-none"
+                  required
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword(!showPassword)}
+                  className="text-zinc-400 hover:text-zinc-200 transition p-1 cursor-pointer"
+                  title={showPassword ? 'Hide password' : 'Show password'}
+                >
+                  {showPassword ? <EyeOff className="w-4 h-4 text-[#FF6BA9]" /> : <Eye className="w-4 h-4" />}
+                </button>
+              </div>
+            </div>
 
-            {/* 11. DIVIDER: "or continue with" */}
-            <div className="relative flex items-center justify-center my-5">
+            {/* Submit Button */}
+            <div className="pt-2">
+              <button
+                type="submit"
+                disabled={submitting}
+                className="w-full py-3.5 px-6 rounded-2xl sm:rounded-3xl bg-[#FF6BA9] hover:bg-[#FF7FB7] active:scale-[0.99] text-white font-serif text-base font-bold shadow-[0_6px_28px_rgba(255,107,169,0.5)] transition flex items-center justify-center gap-2 cursor-pointer disabled:opacity-60"
+              >
+                <span>{submitting ? 'Logging in...' : 'Sign In'}</span>
+                <ArrowRight className="w-5 h-5 text-white" />
+              </button>
+            </div>
+          </form>
+        )}
+
+        {/* ============================================================ */}
+        {/* FORGOT PASSWORD VIEW (Requirement 6)                         */}
+        {/* ============================================================ */}
+        {isForgotPassword && (
+          <form onSubmit={handleForgotPasswordSubmit} className="w-full space-y-4 animate-in fade-in text-left">
+            <div className="p-4 rounded-2xl bg-[#121217] border border-zinc-800 text-center">
+              <KeyRound className="w-8 h-8 text-[#FF6BA9] mx-auto mb-2" />
+              <h3 className="text-base font-serif font-bold text-white mb-1">
+                Forgot Password?
+              </h3>
+              <p className="text-xs text-zinc-400 leading-relaxed">
+                Enter your registered email address and we'll send you a link to reset your password.
+              </p>
+            </div>
+
+            <div>
+              <label className="text-xs font-semibold text-zinc-300 block mb-1.5">
+                Registered Email
+              </label>
+              <div className="flex items-center rounded-2xl border-2 border-[#FF6BA9]/80 focus-within:border-[#FF6BA9] bg-[#121217] px-3.5 py-3 gap-2.5 transition shadow-[0_0_12px_rgba(255,107,169,0.12)]">
+                <Mail className="w-4 h-4 text-[#FF6BA9] shrink-0" />
+                <input
+                  type="email"
+                  value={forgotEmail}
+                  onChange={(e) => setForgotEmail(e.target.value)}
+                  placeholder="name@example.com"
+                  className="w-full bg-transparent text-sm font-medium text-white placeholder:text-zinc-500 focus:outline-none"
+                  required
+                />
+              </div>
+            </div>
+
+            <div className="space-y-2 pt-1">
+              <button
+                type="submit"
+                disabled={submitting}
+                className="w-full py-3.5 px-6 rounded-2xl sm:rounded-3xl bg-[#FF6BA9] hover:bg-[#FF7FB7] text-white font-serif text-base font-bold shadow-[0_6px_28px_rgba(255,107,169,0.5)] transition flex items-center justify-center gap-2 cursor-pointer disabled:opacity-60"
+              >
+                <span>{submitting ? 'Sending Link...' : 'Send Reset Link'}</span>
+                <ArrowRight className="w-5 h-5 text-white" />
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setIsForgotPassword(false);
+                  setErrorMsg(null);
+                  setInfoMsg(null);
+                }}
+                className="w-full py-2.5 text-xs text-zinc-400 hover:text-white transition flex items-center justify-center gap-1.5 cursor-pointer"
+              >
+                <ArrowLeft className="w-3.5 h-3.5" />
+                <span>Back to Login</span>
+              </button>
+            </div>
+          </form>
+        )}
+
+        {/* Divider: "or continue with" */}
+        {!isForgotPassword && (
+          <>
+            <div className="relative flex items-center justify-center my-5 w-full">
               <div className="absolute inset-0 flex items-center">
                 <div className="w-full border-t border-zinc-800"></div>
               </div>
@@ -750,14 +680,13 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess }) => {
               </span>
             </div>
 
-            {/* 12. OUTLINED BUTTON: "Continue with Google" with Google G logo */}
+            {/* Google Sign In Button */}
             <button
               type="button"
               onClick={handleGoogleSignIn}
               disabled={submitting}
-              className="w-full py-3 px-4 rounded-2xl bg-[#121217] border border-zinc-800 hover:border-zinc-600 transition flex items-center justify-center gap-3 text-sm font-medium text-white cursor-pointer active:scale-[0.99]"
+              className="w-full py-3 px-4 rounded-2xl bg-[#121217] border border-zinc-800 hover:border-zinc-600 transition flex items-center justify-center gap-3 text-sm font-medium text-white cursor-pointer active:scale-[0.99] disabled:opacity-60"
             >
-              {/* Official Google G Logo */}
               <svg className="w-5 h-5 shrink-0" viewBox="0 0 24 24">
                 <path fill="#4285F4" d="M23.745 12.27c0-.7-.06-1.4-.19-2.07H12v4.51h6.6c-.29 1.52-1.14 2.82-2.4 3.68v3.05h3.88c2.27-2.09 3.66-5.17 3.66-9.17z"/>
                 <path fill="#34A853" d="M12 24c3.24 0 5.95-1.08 7.93-2.91l-3.88-3.05c-1.08.72-2.45 1.16-4.05 1.16-3.12 0-5.77-2.1-6.72-4.93H1.24v3.15C3.26 21.4 7.33 24 12 24z"/>
@@ -766,130 +695,100 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess }) => {
               </svg>
               <span>Continue with Google</span>
             </button>
-          </div>
-        )}
-
-        {/* ============================================================ */}
-        {/* STEP B: VERIFY OTP SCREEN (Matches exact pink aesthetic)     */}
-        {/* ============================================================ */}
-        {phoneStep === 'verify_otp' && (
-          <form onSubmit={handleVerifyOtp} className="w-full space-y-4 animate-in fade-in">
-            <div className="p-4 rounded-2xl bg-[#121217] border border-zinc-800 text-center">
-              <p className="text-xs text-zinc-400 mb-1">Code sent to:</p>
-              <p className="text-sm font-semibold text-white tracking-wider mb-3">
-                {getFullPhoneNumber()}
-              </p>
-              <button
-                type="button"
-                onClick={() => setPhoneStep('enter_phone')}
-                className="text-xs text-[#FF6BA9] hover:underline inline-flex items-center gap-1 cursor-pointer"
-              >
-                <ArrowLeft className="w-3.5 h-3.5" />
-                <span>Change Mobile Number</span>
-              </button>
-            </div>
-
-            <div className="text-left">
-              <label className="text-xs font-semibold text-zinc-300 block mb-1.5">
-                6-Digit Verification Code
-              </label>
-              <div className="rounded-2xl border-2 border-[#FF6BA9] bg-[#121217] px-3.5 py-3 shadow-[0_0_15px_rgba(255,107,169,0.2)]">
-                <input
-                  type="text"
-                  maxLength={6}
-                  value={otpCode}
-                  onChange={(e) => setOtpCode(e.target.value.replace(/[^0-9]/g, ''))}
-                  placeholder="• • • • • •"
-                  className="w-full bg-transparent text-center text-xl font-mono font-bold tracking-[0.4em] text-white placeholder:text-zinc-600 focus:outline-none"
-                  autoFocus
-                  required
-                />
-              </div>
-            </div>
-
-            <div className="flex items-center justify-between text-xs px-1">
-              <span className="text-zinc-500">Didn't receive code?</span>
-              <button
-                type="button"
-                onClick={handleResendOtp}
-                disabled={countdown > 0 || resending}
-                className="text-[#FF6BA9] font-medium hover:underline disabled:opacity-50 disabled:no-underline cursor-pointer"
-              >
-                {countdown > 0 ? `Resend in ${countdown}s` : resending ? 'Sending...' : 'Resend OTP'}
-              </button>
-            </div>
-
-            <button
-              type="submit"
-              disabled={submitting}
-              className="w-full py-3.5 px-6 rounded-2xl sm:rounded-3xl bg-[#FF6BA9] hover:bg-[#FF7FB7] text-white font-serif text-base font-bold shadow-[0_6px_28px_rgba(255,107,169,0.5)] transition flex items-center justify-center gap-2 cursor-pointer disabled:opacity-60 pt-2"
-            >
-              <span>{submitting ? 'Verifying...' : 'Verify & Enter'}</span>
-              <ArrowRight className="w-5 h-5 text-white" />
-            </button>
-          </form>
+          </>
         )}
       </div>
 
-      {/* 13. BOTTOM: "Protected • Private & Encrypted" with shield icon */}
+      {/* Bottom Protected Footer */}
       <div className="w-full max-w-[420px] z-10 flex items-center justify-center gap-1.5 text-zinc-400 text-xs italic font-serif py-2 select-none">
         <Shield className="w-4 h-4 text-[#FF6BA9] shrink-0" />
         <span 
-          onClick={() => setShowAdminModal(true)} 
-          className="cursor-default hover:text-zinc-300 transition"
+          onClick={() => setShowAdminModal(true)}
+          className="hover:text-zinc-200 transition cursor-pointer"
         >
           Protected • Private & Encrypted
         </span>
       </div>
 
-      {/* SUPER ADMIN POPUP MODAL (Triggered via double-click on logo or footer) */}
+      {/* Hidden Super Admin Access Modal */}
       {showAdminModal && (
-        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="w-full max-w-sm bg-[#121217] border border-zinc-800 rounded-2xl p-5 shadow-2xl">
-            <h3 className="text-sm font-bold text-white mb-1">Super Admin Security Access</h3>
-            <p className="text-xs text-zinc-400 mb-3">Enter Master Key to access system control</p>
-            
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 backdrop-blur-md p-4 animate-in fade-in">
+          <div className="w-full max-w-sm rounded-3xl bg-[#121217] border border-pink-500/30 p-6 shadow-[0_0_50px_rgba(255,107,169,0.3)] text-left">
+            <div className="flex items-center gap-3 mb-4">
+              <div className="w-10 h-10 rounded-full bg-[#FF6BA9]/20 flex items-center justify-center text-[#FF6BA9]">
+                <Shield className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="text-base font-bold text-white">Administrator Access</h3>
+                <p className="text-xs text-zinc-400">Restricted authentication portal</p>
+              </div>
+            </div>
+
             {adminError && (
-              <div className="p-2 mb-3 bg-red-500/20 border border-red-500/40 rounded-lg text-red-200 text-xs">
+              <div className="p-3 mb-4 rounded-xl bg-red-500/10 border border-red-500/20 text-red-300 text-xs">
                 {adminError}
               </div>
             )}
 
-            <form onSubmit={handleAdminSubmit} className="space-y-3">
-              <div className="relative">
-                <input
-                  type={showAdminPasswordText ? 'text' : 'password'}
-                  value={adminPassword}
-                  onChange={(e) => setAdminPassword(e.target.value)}
-                  placeholder="Enter admin password"
-                  className="w-full bg-[#0A0A0A] border border-zinc-800 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-[#FF6BA9]"
-                  autoFocus
-                />
-                <button
-                  type="button"
-                  onClick={() => setShowAdminPasswordText(!showAdminPasswordText)}
-                  className="absolute right-2.5 top-2.5 text-zinc-500 hover:text-zinc-300"
-                >
-                  {showAdminPasswordText ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
-                </button>
+            <form onSubmit={handleSuperAdminLogin} className="space-y-4">
+              <div>
+                <label className="text-xs text-zinc-300 block mb-1.5 font-medium">Select Admin Account</label>
+                <div className="grid grid-cols-2 gap-2 mb-2">
+                  <button
+                    type="button"
+                    onClick={() => setSelectedAdminEmail('gcrtech.raja@gmail.com')}
+                    className={`px-2.5 py-2 rounded-xl text-left border text-xs transition cursor-pointer ${
+                      selectedAdminEmail === 'gcrtech.raja@gmail.com'
+                        ? 'bg-[#FF6BA9]/20 border-[#FF6BA9] text-white font-bold'
+                        : 'bg-zinc-900 border-zinc-800 text-zinc-400 hover:border-zinc-700'
+                    }`}
+                  >
+                    <div className="text-[11px] font-bold truncate">gcrtech.raja</div>
+                    <div className="text-[9px] text-zinc-400">Raja Admin</div>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedAdminEmail('mrraavana07@gmail.com')}
+                    className={`px-2.5 py-2 rounded-xl text-left border text-xs transition cursor-pointer ${
+                      selectedAdminEmail === 'mrraavana07@gmail.com'
+                        ? 'bg-[#FF6BA9]/20 border-[#FF6BA9] text-white font-bold'
+                        : 'bg-zinc-900 border-zinc-800 text-zinc-400 hover:border-zinc-700'
+                    }`}
+                  >
+                    <div className="text-[11px] font-bold truncate">mrraavana07</div>
+                    <div className="text-[9px] text-zinc-400">Raavana Admin</div>
+                  </button>
+                </div>
               </div>
 
-              <div className="flex gap-2">
+              <div>
+                <label className="text-xs text-zinc-300 block mb-1.5 font-medium">Security Password</label>
+                <div className="flex items-center rounded-xl bg-black border border-zinc-800 px-3 py-2.5">
+                  <Lock className="w-4 h-4 text-zinc-500 mr-2 shrink-0" />
+                  <input
+                    type="password"
+                    value={adminPassword}
+                    onChange={(e) => setAdminPassword(e.target.value)}
+                    placeholder="Enter admin password"
+                    className="w-full bg-transparent text-sm text-white focus:outline-none"
+                    autoFocus
+                    required
+                  />
+                </div>
+              </div>
+
+              <div className="flex gap-2 pt-2">
                 <button
                   type="button"
-                  onClick={() => {
-                    setShowAdminModal(false);
-                    setAdminPassword('');
-                    setAdminError(null);
-                  }}
-                  className="flex-1 py-2 text-xs text-zinc-400 bg-zinc-800 hover:bg-zinc-700 rounded-xl"
+                  onClick={() => setShowAdminModal(false)}
+                  className="flex-1 py-2.5 rounded-xl bg-zinc-800 text-zinc-300 text-xs font-semibold hover:bg-zinc-700 transition"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
                   disabled={adminVerifying}
-                  className="flex-1 py-2 text-xs font-bold text-white bg-[#FF6BA9] hover:bg-[#FF7FB7] rounded-xl"
+                  className="flex-1 py-2.5 rounded-xl bg-[#FF6BA9] text-white text-xs font-semibold hover:bg-[#FF7FB7] shadow-[0_0_15px_rgba(255,107,169,0.4)] transition disabled:opacity-50"
                 >
                   {adminVerifying ? 'Verifying...' : 'Unlock Admin'}
                 </button>
@@ -899,6 +798,13 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess }) => {
         </div>
       )}
 
+      {/* Legal Modals */}
+      {showPrivacyModal && (
+        <LegalModals
+          type="privacy"
+          onClose={() => setShowPrivacyModal(false)}
+        />
+      )}
     </div>
   );
 };

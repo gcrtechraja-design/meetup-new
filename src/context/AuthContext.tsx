@@ -8,10 +8,10 @@ import {
   GoogleAuthProvider,
   signOut,
   deleteUser,
-  RecaptchaVerifier,
   signInWithPhoneNumber,
   ConfirmationResult
 } from 'firebase/auth';
+import { getOrCreateRecaptchaVerifier, clearRecaptchaVerifier } from '../utils/recaptcha';
 import { 
   doc, 
   onSnapshot, 
@@ -28,6 +28,15 @@ import { SupportedLanguage } from '../utils/i18n';
 import { seedFirestoreDatabase } from '../firebase/seed';
 import { getDefaultFemaleAvatar } from '../services/staticCdnService';
 import { requestNotificationPermissionAndSaveToken, initFCM } from '../services/fcmService';
+import { findCity } from '../utils/cities';
+import { 
+  getSupabaseClient, 
+  signInWithSupabase, 
+  signUpWithSupabase, 
+  resetPasswordWithSupabase, 
+  signOutFromSupabase 
+} from '../services/supabase';
+import { isAdminEmail, isUserAdmin } from '../utils/admin';
 
 interface AuthContextType {
   currentUser: UserProfile | null;
@@ -35,6 +44,9 @@ interface AuthContextType {
   loading: boolean;
   login: (email: string, pass: string) => Promise<void>;
   loginWithGoogle: () => Promise<void>;
+  signInWithSupabaseAuth: (email: string, pass: string) => Promise<void>;
+  signUpWithSupabaseAuth: (params: { name: string; email: string; pass: string }) => Promise<{ needsEmailConfirmation: boolean; user: any }>;
+  resetPasswordForEmail: (email: string) => Promise<boolean>;
   register: (data: {
     email: string;
     pass: string;
@@ -42,9 +54,11 @@ interface AuthContextType {
     age: number;
     gender: 'male' | 'female' | 'other';
     location: string;
+    city?: string;
     bio?: string;
     interests?: string[];
     role?: UserRole;
+    allowVideoCalls?: boolean;
   }) => Promise<void>;
   sendPhoneOtp: (phoneNumber: string, containerId?: string) => Promise<ConfirmationResult>;
   verifyPhoneLogin: (confirmationResult: ConfirmationResult, otp: string, phoneNumber: string) => Promise<void>;
@@ -57,9 +71,11 @@ interface AuthContextType {
       age: number;
       gender: 'male' | 'female' | 'other';
       location: string;
+      city?: string;
       bio?: string;
       interests?: string[];
       role?: UserRole;
+      allowVideoCalls?: boolean;
     }
   ) => Promise<void>;
   logout: () => Promise<void>;
@@ -68,8 +84,8 @@ interface AuthContextType {
   updateDiamonds: (delta: number) => Promise<void>;
   deleteMyAccount: () => Promise<void>;
   demoLoginAsUser: () => Promise<void>;
-  demoLoginAsAdmin: () => Promise<void>;
-  loginAsSuperAdmin: (password: string) => Promise<void>;
+  demoLoginAsAdmin: (targetEmail?: string) => Promise<void>;
+  loginAsSuperAdmin: (password: string, adminEmail?: string) => Promise<void>;
   requestPushPermission: () => Promise<void>;
 }
 
@@ -113,6 +129,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     unsubscribeSnapshotRef.current = onSnapshot(userDocRef, (docSnapshot) => {
       if (docSnapshot.exists()) {
         const data = docSnapshot.data() as UserProfile;
+        const isAdmin = isAdminEmail(data.email);
+        if (isAdmin && (data.role !== 'admin' || !data.is_admin)) {
+          data.role = 'admin';
+          data.is_admin = true;
+          data.isAdmin = true;
+          updateDoc(userDocRef, { role: 'admin', is_admin: true, isAdmin: true }).catch(() => {});
+        }
         // Real customer without uploaded photo: ensure cute female avatar illustration
         if (data.role === 'user' && (!data.profile_pic || data.profile_pic.includes('bottts') || data.profile_pic.includes('seed=user'))) {
           const femaleAvatar = getDefaultFemaleAvatar(uid);
@@ -135,6 +158,102 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     seedFirestoreDatabase().catch(console.error);
   }, []);
 
+  // Helper to sync Supabase user session to Firestore and bind state
+  const handleSupabaseUserSession = async (sbUser: any) => {
+    const uid = sbUser.id;
+    const userDocRef = doc(db, 'users', uid);
+    const email = sbUser.email?.trim().toLowerCase() || '';
+    const isAdmin = isAdminEmail(email);
+
+    // Sync to Supabase profiles table
+    if (isAdmin) {
+      try {
+        const supabase = getSupabaseClient();
+        await supabase
+          .from('profiles')
+          .update({ role: 'admin', is_admin: true })
+          .eq('id', uid);
+      } catch (err) {
+        console.warn('Could not update role in Supabase profiles:', err);
+      }
+    }
+
+    try {
+      const snap = await getDoc(userDocRef);
+      if (!snap.exists()) {
+        const name = sbUser.user_metadata?.name || sbUser.user_metadata?.full_name || sbUser.email?.split('@')[0] || (isAdmin ? 'Admin' : 'Member');
+        const newProfile: UserProfile = {
+          uid,
+          name,
+          email: sbUser.email || '',
+          age: 25,
+          gender: 'other',
+          location: 'Chennai, Tamil Nadu',
+          bio: isAdmin ? 'Meet Up Platform Administrator' : 'Hey there! Exploring Meet Up.',
+          profile_pic: getDefaultFemaleAvatar(uid),
+          interests: isAdmin ? ['Safety', 'Platform Operations', 'Moderation'] : ['Music', 'Dating', 'Conversations'],
+          language: 'en',
+          role: isAdmin ? 'admin' : 'user',
+          is_admin: isAdmin,
+          isAdmin: isAdmin,
+          coins_balance: isAdmin ? 9999 : 50,
+          diamonds_balance: isAdmin ? 500 : 0,
+          voice_rate: 20,
+          video_rate: 50,
+          status: 'online',
+          is_blocked: false,
+          isBlocked: false,
+          created_at: serverTimestamp(),
+          createdAt: serverTimestamp(),
+        };
+        await setDoc(userDocRef, newProfile);
+      } else {
+        const existingData = snap.data();
+        if (isAdmin && (existingData.role !== 'admin' || !existingData.is_admin)) {
+          await updateDoc(userDocRef, {
+            role: 'admin',
+            is_admin: true,
+            isAdmin: true,
+            coins_balance: Math.max(existingData.coins_balance || 0, 9999),
+          });
+        }
+      }
+    } catch (e) {
+      console.warn('Error reading/writing user doc for Supabase auth:', e);
+    }
+    bindUserDoc(uid);
+    setLoading(false);
+  };
+
+  // Listen to Supabase Auth state (persisted session)
+  useEffect(() => {
+    let isMounted = true;
+    const supabase = getSupabaseClient();
+
+    supabase.auth.getSession().then(async ({ data: { session } }) => {
+      if (!isMounted) return;
+      if (session?.user) {
+        await handleSupabaseUserSession(session.user);
+      }
+    }).catch(console.warn);
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
+      if (!isMounted) return;
+      if (session?.user) {
+        await handleSupabaseUserSession(session.user);
+      } else if (event === 'SIGNED_OUT') {
+        if (!auth.currentUser && !localStorage.getItem('meetup_active_user_uid')) {
+          setCurrentUser(null);
+        }
+      }
+    });
+
+    return () => {
+      isMounted = false;
+      subscription?.unsubscribe();
+    };
+  }, []);
+
   // Listen to Firebase Auth state with fallback to local session
   useEffect(() => {
     const unsubscribeAuth = onAuthStateChanged(auth, async (fUser) => {
@@ -143,6 +262,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       if (fUser) {
         localStorage.removeItem('meetup_active_user_uid');
         const userDocRef = doc(db, 'users', fUser.uid);
+        const email = fUser.email?.trim().toLowerCase() || '';
+        const isAdmin = isAdminEmail(email);
         
         // Ensure doc exists in Firestore
         try {
@@ -151,19 +272,21 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             const fallbackEmail = fUser.email || (fUser.phoneNumber ? `${fUser.phoneNumber.replace(/[^0-9]/g, '')}@meetup.user` : '');
             const newProfile: UserProfile = {
               uid: fUser.uid,
-              name: fUser.displayName || (fUser.phoneNumber ? `User ${fUser.phoneNumber.slice(-4)}` : fUser.email?.split('@')[0] || 'Member'),
+              name: fUser.displayName || (fUser.phoneNumber ? `User ${fUser.phoneNumber.slice(-4)}` : fUser.email?.split('@')[0] || (isAdmin ? 'Admin' : 'Member')),
               email: fallbackEmail,
               phone_number: fUser.phoneNumber || undefined,
-              age: 22,
+              age: 25,
               gender: 'other',
               location: 'Chennai, Tamil Nadu',
-              bio: 'Hey there! Exploring Meet Up.',
+              bio: isAdmin ? 'Meet Up Platform Administrator' : 'Hey there! Exploring Meet Up.',
               profile_pic: fUser.photoURL || `https://api.dicebear.com/7.x/bottts/svg?seed=${fUser.uid}`,
-              interests: ['Music', 'Dating', 'Conversations'],
+              interests: isAdmin ? ['Safety', 'Platform Operations', 'Moderation'] : ['Music', 'Dating', 'Conversations'],
               language: 'en',
-              role: fUser.email === 'admin@meetup.com' ? 'admin' : 'user',
-              coins_balance: fUser.email === 'admin@meetup.com' ? 9999 : 50,
-              diamonds_balance: 0,
+              role: isAdmin ? 'admin' : 'user',
+              is_admin: isAdmin,
+              isAdmin: isAdmin,
+              coins_balance: isAdmin ? 9999 : 50,
+              diamonds_balance: isAdmin ? 500 : 0,
               voice_rate: 20,
               video_rate: 50,
               status: 'online',
@@ -173,8 +296,18 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
               createdAt: serverTimestamp(),
             };
             await setDoc(userDocRef, newProfile);
-          } else if (fUser.phoneNumber && !snap.data().phone_number) {
-            await updateDoc(userDocRef, { phone_number: fUser.phoneNumber });
+          } else {
+            const existingData = snap.data();
+            if (isAdmin && (existingData.role !== 'admin' || !existingData.is_admin)) {
+              await updateDoc(userDocRef, {
+                role: 'admin',
+                is_admin: true,
+                isAdmin: true,
+                coins_balance: Math.max(existingData.coins_balance || 0, 9999),
+              });
+            } else if (fUser.phoneNumber && !existingData.phone_number) {
+              await updateDoc(userDocRef, { phone_number: fUser.phoneNumber });
+            }
           }
         } catch (e) {
           console.warn('Error reading/writing user doc on auth change:', e);
@@ -182,18 +315,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
         bindUserDoc(fUser.uid);
       } else {
-        // If not in Firebase Auth, check if there is an active local demo / fallback user
-        const savedLocalUid = localStorage.getItem('meetup_active_user_uid');
-        if (savedLocalUid) {
-          bindUserDoc(savedLocalUid);
-        } else {
-          if (unsubscribeSnapshotRef.current) {
-            unsubscribeSnapshotRef.current();
-            unsubscribeSnapshotRef.current = null;
-          }
-          setCurrentUser(null);
-          setLoading(false);
+        // If not in Firebase Auth, clear any legacy session and ensure user is logged out
+        localStorage.removeItem('meetup_active_user_uid');
+        if (unsubscribeSnapshotRef.current) {
+          unsubscribeSnapshotRef.current();
+          unsubscribeSnapshotRef.current = null;
         }
+        setCurrentUser(null);
+        setLoading(false);
       }
     });
 
@@ -219,11 +348,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
-  const login = async (email: string, pass: string) => {
+  // Supabase Auth Methods
+  const signInWithSupabaseAuth = async (email: string, pass: string) => {
     setLoading(true);
     const trimmedEmail = email.trim().toLowerCase();
 
-    // Check if it's admin credentials
+    // Check if it's super admin credentials
     if (trimmedEmail === 'admin@meetup.com' && pass === 'admin123') {
       await demoLoginAsAdmin();
       setLoading(false);
@@ -231,50 +361,70 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
 
     try {
-      await signInWithEmailAndPassword(auth, trimmedEmail, pass);
-    } catch (err: any) {
-      // If Email/Password auth is disabled in Firebase console (operation-not-allowed)
-      if (err.code === 'auth/operation-not-allowed' || err.code === 'auth/admin-restricted-operation') {
-        const localUid = `user_${btoa(trimmedEmail).replace(/[^a-zA-Z0-9]/g, '').slice(0, 20)}`;
-        const userDocRef = doc(db, 'users', localUid);
-        const snap = await getDoc(userDocRef);
-        if (snap.exists()) {
-          localStorage.setItem('meetup_active_user_uid', localUid);
-          bindUserDoc(localUid);
-          return;
-        } else {
-          // Create user profile in Firestore
-          const newProfile: UserProfile = {
-            uid: localUid,
-            name: trimmedEmail.split('@')[0],
-            email: trimmedEmail,
-            age: 23,
-            gender: 'other',
-            location: 'Chennai, Tamil Nadu',
-            bio: 'Hey there! Exploring Meet Up.',
-            profile_pic: getDefaultFemaleAvatar(localUid),
-            interests: ['Conversations', 'Music'],
-            language: 'en',
-            role: 'user',
-            coins_balance: 50,
-            diamonds_balance: 0,
-            voice_rate: 20,
-            video_rate: 50,
-            status: 'online',
-            is_blocked: false,
-            isBlocked: false,
-            created_at: serverTimestamp(),
-            createdAt: serverTimestamp(),
-          };
-          await setDoc(userDocRef, newProfile);
-          localStorage.setItem('meetup_active_user_uid', localUid);
-          bindUserDoc(localUid);
-          return;
-        }
+      const res = await signInWithSupabase(trimmedEmail, pass);
+      if (res.user) {
+        await handleSupabaseUserSession(res.user);
       }
+    } catch (err: any) {
+      console.error('Supabase signInWithPassword error:', err);
       throw err;
     } finally {
       setLoading(false);
+    }
+  };
+
+  const signUpWithSupabaseAuth = async (params: { name: string; email: string; pass: string }) => {
+    setLoading(true);
+    const trimmedEmail = params.email.trim().toLowerCase();
+    const trimmedName = params.name.trim();
+
+    try {
+      const res = await signUpWithSupabase({
+        name: trimmedName,
+        email: trimmedEmail,
+        password: params.pass,
+      });
+
+      if (res.user) {
+        await handleSupabaseUserSession(res.user);
+      }
+
+      return {
+        needsEmailConfirmation: res.needsEmailConfirmation,
+        user: res.user,
+      };
+    } catch (err: any) {
+      console.error('Supabase signUp error:', err);
+      throw err;
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const resetPasswordForEmail = async (email: string): Promise<boolean> => {
+    return await resetPasswordWithSupabase(email);
+  };
+
+  const login = async (email: string, pass: string) => {
+    // Primary auth via Supabase Auth
+    try {
+      await signInWithSupabaseAuth(email, pass);
+    } catch (sbErr: any) {
+      // If error is invalid credentials or email not found, throw it directly
+      const msg = sbErr.message || '';
+      if (
+        msg.includes('Invalid email or password') ||
+        msg.includes('No account found') ||
+        msg.includes('confirm your email')
+      ) {
+        throw sbErr;
+      }
+      // Otherwise try Firebase email/pass as fallback
+      try {
+        await signInWithEmailAndPassword(auth, email.trim().toLowerCase(), pass);
+      } catch {
+        throw sbErr;
+      }
     }
   };
 
@@ -285,33 +435,47 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     age: number;
     gender: 'male' | 'female' | 'other';
     location: string;
+    city?: string;
     bio?: string;
     interests?: string[];
     role?: UserRole;
+    allowVideoCalls?: boolean;
   }) => {
     setLoading(true);
     const trimmedEmail = data.email.trim().toLowerCase();
 
     try {
-      const userCred = await createUserWithEmailAndPassword(auth, trimmedEmail, data.pass);
-      const uid = userCred.user.uid;
-      const targetRole: UserRole = data.role || (trimmedEmail === 'admin@meetup.com' ? 'admin' : 'user');
-      
+      const res = await signUpWithSupabase({
+        name: data.name,
+        email: trimmedEmail,
+        password: data.pass,
+      });
+
+      const uid = res.user.id;
+      const isAdmin = isAdminEmail(trimmedEmail);
+      const targetRole: UserRole = isAdmin ? 'admin' : (data.role || 'user');
+      const cityData = findCity(data.city || data.location);
+
       const newProfile: UserProfile = {
         uid,
         name: data.name.trim(),
         email: trimmedEmail,
-        age: Number(data.age),
-        gender: data.gender,
-        location: data.location.trim() || 'Tamil Nadu, India',
-        bio: data.bio?.trim() || (targetRole === 'listener' ? 'Empathetic listener ready for friendly audio & video chats.' : 'Hi! Looking to connect and meet amazing listeners.'),
-        // Real customer without uploaded photo -> Cute female avatar illustration
+        age: Number(data.age) || 23,
+        gender: data.gender || 'other',
+        location: data.location?.trim() || `${cityData.name}, ${cityData.state}`,
+        city: data.city?.trim() || cityData.name,
+        latitude: cityData.lat,
+        longitude: cityData.lng,
+        allowVideoCalls: data.allowVideoCalls !== false,
+        bio: data.bio?.trim() || (isAdmin ? 'Meet Up Platform Administrator' : targetRole === 'listener' ? 'Empathetic listener ready for friendly audio & video chats.' : 'Hi! Looking to connect and meet amazing listeners.'),
         profile_pic: getDefaultFemaleAvatar(uid),
-        interests: data.interests && data.interests.length > 0 ? data.interests : ['Dating', 'Friendly Chats', 'Music'],
+        interests: data.interests && data.interests.length > 0 ? data.interests : (isAdmin ? ['Safety', 'Platform Operations'] : ['Dating', 'Friendly Chats', 'Music']),
         language: 'en',
         role: targetRole,
-        coins_balance: targetRole === 'listener' ? 0 : 50,
-        diamonds_balance: 0,
+        is_admin: isAdmin || targetRole === 'admin',
+        isAdmin: isAdmin || targetRole === 'admin',
+        coins_balance: (isAdmin || targetRole === 'admin') ? 9999 : (targetRole === 'listener' ? 0 : 50),
+        diamonds_balance: (isAdmin || targetRole === 'admin') ? 500 : 0,
         voice_rate: 20,
         video_rate: 50,
         audio_rate_coins: 20,
@@ -324,41 +488,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       };
 
       await setDoc(doc(db, 'users', uid), newProfile);
-    } catch (err: any) {
-      // If Email/Password auth is disabled in Firebase console (operation-not-allowed)
-      if (err.code === 'auth/operation-not-allowed' || err.code === 'auth/admin-restricted-operation') {
-        const localUid = `user_${btoa(trimmedEmail).replace(/[^a-zA-Z0-9]/g, '').slice(0, 20)}`;
-        const targetRole: UserRole = data.role || (trimmedEmail === 'admin@meetup.com' ? 'admin' : 'user');
-        const newProfile: UserProfile = {
-          uid: localUid,
-          name: data.name.trim(),
-          email: trimmedEmail,
-          age: Number(data.age),
-          gender: data.gender,
-          location: data.location.trim() || 'Tamil Nadu, India',
-          bio: data.bio?.trim() || (targetRole === 'listener' ? 'Empathetic listener ready for friendly audio & video chats.' : 'Hi! Looking to connect and meet amazing listeners.'),
-          profile_pic: getDefaultFemaleAvatar(localUid),
-          interests: data.interests && data.interests.length > 0 ? data.interests : ['Dating', 'Friendly Chats', 'Music'],
-          language: 'en',
-          role: targetRole,
-          coins_balance: targetRole === 'listener' ? 0 : 50,
-          diamonds_balance: 0,
-          voice_rate: 20,
-          video_rate: 50,
-          audio_rate_coins: 20,
-          video_rate_coins: 50,
-          status: 'online',
-          is_blocked: false,
-          isBlocked: false,
-          created_at: serverTimestamp(),
-          createdAt: serverTimestamp(),
-        };
-
-        await setDoc(doc(db, 'users', localUid), newProfile);
-        localStorage.setItem('meetup_active_user_uid', localUid);
-        bindUserDoc(localUid);
-        return;
+      if (res.session) {
+        bindUserDoc(uid);
       }
+    } catch (err: any) {
+      console.error('Registration error:', err);
       throw err;
     } finally {
       setLoading(false);
@@ -371,73 +505,16 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       throw new Error('Please enter a valid phone number with country code (e.g. +91 9876543210)');
     }
 
-    // Ensure container element exists in DOM
-    let container = document.getElementById(containerId);
-    if (!container) {
-      container = document.createElement('div');
-      container.id = containerId;
-      document.body.appendChild(container);
-    }
-
-    // Use already initialized verifier from component mount if available
-    let verifier = (window as any).recaptchaVerifier;
-
-    if (!verifier) {
-      // Check if window.recaptchaVerifier exists, if yes clear it
-      if ((window as any).recaptchaVerifier) {
-        try {
-          (window as any).recaptchaVerifier.clear();
-        } catch (e) {
-          console.warn('Error clearing existing recaptchaVerifier:', e);
-        }
-        (window as any).recaptchaVerifier = null;
-      }
-
-      // Clear existing DOM container before creating new one
-      container.innerHTML = '';
-
-      // Initialize invisible reCAPTCHA
-      verifier = new RecaptchaVerifier(auth, containerId, {
-        size: 'invisible',
-        callback: () => {
-          // reCAPTCHA solved
-        },
-        'expired-callback': () => {
-          console.warn('reCAPTCHA expired');
-          if ((window as any).recaptchaVerifier) {
-            try {
-              (window as any).recaptchaVerifier.clear();
-            } catch (e) {}
-            (window as any).recaptchaVerifier = null;
-          }
-        }
-      });
-
-      // Render only once
-      try {
-        await verifier.render();
-      } catch (renderErr) {
-        console.warn('reCAPTCHA render warning in sendPhoneOtp:', renderErr);
-      }
-
-      (window as any).recaptchaVerifier = verifier;
-    }
+    // Get or initialize singleton RecaptchaVerifier (renders only once)
+    const verifier = await getOrCreateRecaptchaVerifier(auth, containerId);
 
     try {
       const confirmationResult = await signInWithPhoneNumber(auth, cleaned, verifier);
       return confirmationResult;
     } catch (err: any) {
       console.error('Firebase signInWithPhoneNumber error:', err);
-      // Clean up verifier on error so subsequent requests can re-initialize safely
-      if ((window as any).recaptchaVerifier) {
-        try {
-          (window as any).recaptchaVerifier.clear();
-        } catch (e) {}
-        (window as any).recaptchaVerifier = null;
-      }
-      if (container) {
-        container.innerHTML = '';
-      }
+      // Clean up verifier and reset container on error so retry works cleanly without duplicate render errors
+      clearRecaptchaVerifier(containerId);
 
       // If Phone Auth is disabled or restricted in Firebase console (operation-not-allowed)
       if (err.code === 'auth/operation-not-allowed' || err.code === 'auth/admin-restricted-operation') {
@@ -544,9 +621,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       age: number;
       gender: 'male' | 'female' | 'other';
       location: string;
+      city?: string;
       bio?: string;
       interests?: string[];
       role?: UserRole;
+      allowVideoCalls?: boolean;
     }
   ) => {
     setLoading(true);
@@ -560,6 +639,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const userCredential = await confirmationResult.confirm(cleanedOtp);
       const fUser = userCredential.user;
       const targetRole: UserRole = data.role || 'user';
+      const cityData = findCity(data.city || data.location);
       
       const newProfile: UserProfile = {
         uid: fUser.uid,
@@ -568,7 +648,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         phone_number: data.phone,
         age: Number(data.age),
         gender: data.gender,
-        location: data.location.trim() || 'Tamil Nadu, India',
+        location: data.location.trim() || `${cityData.name}, ${cityData.state}`,
+        city: data.city?.trim() || cityData.name,
+        latitude: cityData.lat,
+        longitude: cityData.lng,
+        allowVideoCalls: data.allowVideoCalls !== false,
         bio: data.bio?.trim() || (targetRole === 'listener' ? 'Empathetic listener ready for friendly audio & video chats.' : 'Hi! Looking to connect and meet amazing listeners.'),
         profile_pic: getDefaultFemaleAvatar(fUser.uid),
         interests: data.interests && data.interests.length > 0 ? data.interests : ['Dating', 'Friendly Chats', 'Music'],
@@ -674,10 +758,16 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
-  const demoLoginAsAdmin = async () => {
+  const demoLoginAsAdmin = async (targetEmail: string = 'gcrtech.raja@gmail.com') => {
     setLoading(true);
-    const adminEmail = 'admin@meetup.com';
+    const adminEmail = targetEmail.trim().toLowerCase();
     const adminPass = 'admin123';
+    const isRaavana = adminEmail === 'mrraavana07@gmail.com';
+    const adminName = isRaavana ? 'Raavana Admin' : 'Raja Admin';
+    const adminUid = isRaavana ? 'admin_mrraavana07' : 'admin_gcrtech_raja';
+    const adminAvatar = isRaavana
+      ? 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=300&h=300&fit=crop&crop=faces'
+      : 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=300&h=300&fit=crop&crop=faces';
 
     try {
       await signInWithEmailAndPassword(auth, adminEmail, adminPass);
@@ -686,16 +776,18 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         const cred = await createUserWithEmailAndPassword(auth, adminEmail, adminPass);
         await setDoc(doc(db, 'users', cred.user.uid), {
           uid: cred.user.uid,
-          name: 'Meet Up Admin',
+          name: adminName,
           email: adminEmail,
           age: 30,
           gender: 'other',
           location: 'Chennai, Tamil Nadu',
-          bio: 'Meet Up Platform Super Administrator',
-          profile_pic: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=300&h=300&fit=crop&crop=faces',
-          interests: ['Safety', 'Moderation'],
+          bio: 'Meet Up Platform Administrator',
+          profile_pic: adminAvatar,
+          interests: ['Safety', 'Moderation', 'Platform Operations'],
           language: 'en',
           role: 'admin',
+          is_admin: true,
+          isAdmin: true,
           coins_balance: 9999,
           diamonds_balance: 500,
           voice_rate: 20,
@@ -709,22 +801,23 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       } catch (e) {
         // Operation not allowed or credentials failed in Firebase Auth:
         // Gracefully persist & activate super admin in Firestore directly!
-        const adminUid = 'admin_meetup_super';
         const adminDocRef = doc(db, 'users', adminUid);
         const snap = await getDoc(adminDocRef);
         if (!snap.exists()) {
           await setDoc(adminDocRef, {
             uid: adminUid,
-            name: 'Meet Up Admin',
+            name: adminName,
             email: adminEmail,
             age: 30,
             gender: 'other',
             location: 'Chennai, Tamil Nadu',
-            bio: 'Meet Up Platform Super Administrator',
-            profile_pic: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=300&h=300&fit=crop&crop=faces',
-            interests: ['Safety', 'Moderation'],
+            bio: 'Meet Up Platform Administrator',
+            profile_pic: adminAvatar,
+            interests: ['Safety', 'Moderation', 'Platform Operations'],
             language: 'en',
             role: 'admin',
+            is_admin: true,
+            isAdmin: true,
             coins_balance: 9999,
             diamonds_balance: 500,
             voice_rate: 20,
@@ -744,11 +837,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
-  const loginAsSuperAdmin = async (securityPassword: string) => {
+  const loginAsSuperAdmin = async (securityPassword: string, adminEmail: string = 'gcrtech.raja@gmail.com') => {
     if (securityPassword !== 'Raja@2026') {
       throw new Error('Access Denied: Incorrect Super Admin Password.');
     }
-    await demoLoginAsAdmin();
+    await demoLoginAsAdmin(adminEmail);
   };
 
   const logout = async () => {
@@ -760,10 +853,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       }
     }
     localStorage.removeItem('meetup_active_user_uid');
+    localStorage.removeItem('meetup_supabase_auth_token');
     if (unsubscribeSnapshotRef.current) {
       unsubscribeSnapshotRef.current();
       unsubscribeSnapshotRef.current = null;
     }
+    await signOutFromSupabase();
     try {
       await signOut(auth);
     } catch {}
@@ -822,6 +917,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         loading,
         login,
         loginWithGoogle,
+        signInWithSupabaseAuth,
+        signUpWithSupabaseAuth,
+        resetPasswordForEmail,
         register,
         sendPhoneOtp,
         verifyPhoneLogin,

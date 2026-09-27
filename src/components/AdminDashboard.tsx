@@ -13,20 +13,27 @@ import {
   Radio, 
   Headphones,
   Check,
-  AlertCircle
+  AlertCircle,
+  Eye,
+  EyeOff,
+  Calendar,
+  Mail,
+  Phone,
+  MapPin,
+  Coins,
+  Video,
+  ExternalLink
 } from 'lucide-react';
 import { 
   collection, 
   getDocs, 
   doc, 
   updateDoc, 
-  deleteDoc, 
-  query, 
-  orderBy, 
-  limit 
+  deleteDoc 
 } from 'firebase/firestore';
 import { db } from '../firebase/config';
 import { useAuth } from '../context/AuthContext';
+import { isUserAdmin } from '../utils/admin';
 import { UserProfile, Report, CallLog, ListenerApplication, Transaction } from '../types';
 import { getUserAvatarUrl } from '../services/staticCdnService';
 import { isListenerOffline } from '../utils/presence';
@@ -35,10 +42,45 @@ interface AdminDashboardProps {
   onClose: () => void;
 }
 
+/**
+ * Masks phone number into format: 98XXXXXX10 (first 2 and last 2 visible)
+ */
+export function maskPhoneNumber(phone?: string): string {
+  if (!phone) return 'Not Provided';
+  const clean = phone.replace(/\s+/g, '');
+  if (clean.length <= 4) return '••••••••';
+  const prefix = clean.slice(0, 2);
+  const suffix = clean.slice(-2);
+  const maskLength = Math.max(clean.length - 4, 4);
+  return `${prefix}${'X'.repeat(maskLength)}${suffix}`;
+}
+
+/**
+ * Formats joined date from Firestore timestamp or string
+ */
+export function formatJoinedDate(createdAt: any): string {
+  if (!createdAt) return 'Recently';
+  try {
+    if (typeof createdAt?.toDate === 'function') {
+      return createdAt.toDate().toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
+    }
+    if (typeof createdAt?.seconds === 'number') {
+      return new Date(createdAt.seconds * 1000).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
+    }
+    const d = new Date(createdAt);
+    if (!isNaN(d.getTime())) {
+      return d.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
+    }
+  } catch {
+    // fallback
+  }
+  return 'Recently';
+}
+
 export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onClose }) => {
   const { currentUser } = useAuth();
 
-  const [activeTab, setActiveTab] = useState<'users' | 'reports' | 'applications' | 'calls'>('users');
+  const [activeTab, setActiveTab] = useState<'users' | 'listeners' | 'reports' | 'applications' | 'calls'>('users');
   const [usersList, setUsersList] = useState<UserProfile[]>([]);
   const [reportsList, setReportsList] = useState<Report[]>([]);
   const [applicationsList, setApplicationsList] = useState<ListenerApplication[]>([]);
@@ -46,6 +88,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onClose }) => {
   const [totalRevenue, setTotalRevenue] = useState<number>(0);
   const [searchQuery, setSearchQuery] = useState('');
   const [loading, setLoading] = useState(true);
+
+  // Mask toggle state: maps user uid -> boolean (true if revealed)
+  const [revealedPhones, setRevealedPhones] = useState<Record<string, boolean>>({});
+
+  // Details popup state
+  const [selectedUserDetail, setSelectedUserDetail] = useState<UserProfile | null>(null);
 
   // Edit coins modal state
   const [editingUser, setEditingUser] = useState<UserProfile | null>(null);
@@ -99,68 +147,74 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onClose }) => {
     fetchAdminData();
   }, []);
 
-  if (currentUser?.role !== 'admin') {
-    return (
-      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/90 p-4">
-        <div className="bg-[#16161C] border border-red-500/40 rounded-3xl p-6 text-center max-w-sm">
-          <AlertCircle className="w-12 h-12 text-red-500 mx-auto mb-3" />
-          <h3 className="text-lg font-bold text-white">Access Denied</h3>
-          <p className="text-xs text-zinc-400 mt-1">This panel is protected for platform administrators only.</p>
-          <button
-            onClick={onClose}
-            className="mt-4 px-6 py-2 rounded-xl bg-zinc-800 text-white text-xs font-bold"
-          >
-            Close
-          </button>
-        </div>
-      </div>
-    );
-  }
+  const togglePhoneReveal = (uid: string, e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
+    setRevealedPhones((prev) => ({
+      ...prev,
+      [uid]: !prev[uid],
+    }));
+  };
 
-  // Actions
   const handleToggleBlock = async (user: UserProfile) => {
+    const isCurrentlyBlocked = Boolean(user.is_blocked || user.isBlocked);
+    const newStatus = !isCurrentlyBlocked;
     try {
-      const newBlocked = !user.is_blocked;
       await updateDoc(doc(db, 'users', user.uid), {
-        is_blocked: newBlocked,
+        is_blocked: newStatus,
+        isBlocked: newStatus,
       });
       setUsersList((prev) =>
-        prev.map((u) => (u.uid === user.uid ? { ...u, is_blocked: newBlocked } : u))
+        prev.map((u) => (u.uid === user.uid ? { ...u, is_blocked: newStatus, isBlocked: newStatus } : u))
       );
-    } catch (e) {
-      console.error('Failed to toggle block:', e);
+      if (selectedUserDetail?.uid === user.uid) {
+        setSelectedUserDetail((prev) => prev ? { ...prev, is_blocked: newStatus, isBlocked: newStatus } : null);
+      }
+    } catch (err) {
+      console.error('Failed to toggle block status:', err);
     }
   };
 
   const handleTogglePresence = async (user: UserProfile) => {
+    const isCurrentlyOffline = isListenerOffline(user);
+    const newStatus = isCurrentlyOffline ? 'online' : 'offline';
     try {
-      const isCurrentlyOffline = isListenerOffline(user);
-      const newStatus = isCurrentlyOffline ? 'online' : 'unavailable';
-      const newPresence = isCurrentlyOffline ? 'available' : 'unavailable';
-      const newIsAvailable = isCurrentlyOffline;
-
       await updateDoc(doc(db, 'users', user.uid), {
         status: newStatus,
-        presence_status: newPresence,
-        presence: newPresence,
-        is_available: newIsAvailable,
+        presence_status: newStatus,
+        presence: newStatus,
+        is_available: newStatus === 'online',
+        isOffline: newStatus !== 'online',
       });
-
       setUsersList((prev) =>
         prev.map((u) =>
           u.uid === user.uid
             ? {
                 ...u,
                 status: newStatus as any,
-                presence_status: newPresence,
-                presence: newPresence,
-                is_available: newIsAvailable,
+                presence_status: newStatus,
+                presence: newStatus,
+                is_available: newStatus === 'online',
+                isOffline: newStatus !== 'online',
               }
             : u
         )
       );
-    } catch (e) {
-      console.error('Failed to toggle presence:', e);
+      if (selectedUserDetail?.uid === user.uid) {
+        setSelectedUserDetail((prev) =>
+          prev
+            ? {
+                ...prev,
+                status: newStatus as any,
+                presence_status: newStatus,
+                presence: newStatus,
+                is_available: newStatus === 'online',
+                isOffline: newStatus !== 'online',
+              }
+            : null
+        );
+      }
+    } catch (err) {
+      console.error('Failed to toggle presence:', err);
     }
   };
 
@@ -168,32 +222,34 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onClose }) => {
     if (!editingUser) return;
     try {
       await updateDoc(doc(db, 'users', editingUser.uid), {
-        coins_balance: Number(coinInput),
+        coins_balance: coinInput,
       });
       setUsersList((prev) =>
-        prev.map((u) => (u.uid === editingUser.uid ? { ...u, coins_balance: Number(coinInput) } : u))
+        prev.map((u) => (u.uid === editingUser.uid ? { ...u, coins_balance: coinInput } : u))
       );
+      if (selectedUserDetail?.uid === editingUser.uid) {
+        setSelectedUserDetail((prev) => prev ? { ...prev, coins_balance: coinInput } : null);
+      }
       setEditingUser(null);
-    } catch (e) {
-      console.error('Failed to update coins:', e);
+    } catch (err) {
+      console.error('Failed to update coins:', err);
     }
   };
 
   const handleApproveApplication = async (app: ListenerApplication) => {
     try {
-      // 1. Update application status
       if (app.id) {
         await updateDoc(doc(db, 'listener_applications', app.id), {
           status: 'approved',
         });
       }
-      // 2. Elevate user role to 'listener' in Firestore
       await updateDoc(doc(db, 'users', app.user_id), {
         role: 'listener',
         isBlocked: false,
         is_blocked: false,
         voice_rate: app.voice_rate || 20,
         video_rate: app.video_rate || 50,
+        allowVideoCalls: app.allowVideoCalls !== false,
       });
 
       setApplicationsList((prev) =>
@@ -229,14 +285,42 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onClose }) => {
     }
   };
 
-  const filteredUsers = usersList.filter(
-    (u) =>
-      u.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      u.email.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      u.location.toLowerCase().includes(searchQuery.toLowerCase())
-  );
+  // Search filter for name or email
+  const searchFilter = (u: UserProfile) => {
+    if (!searchQuery.trim()) return true;
+    const q = searchQuery.toLowerCase();
+    const nameMatch = u.name?.toLowerCase().includes(q);
+    const emailMatch = u.email?.toLowerCase().includes(q);
+    const phoneMatch = u.phone?.toLowerCase().includes(q);
+    const locMatch = u.location?.toLowerCase().includes(q);
+    return Boolean(nameMatch || emailMatch || phoneMatch || locMatch);
+  };
 
-  const onlineListenersCount = usersList.filter((u) => u.role === 'listener' && u.status === 'online').length;
+  // Tab 1: Users (role === 'user' or non-listener)
+  const regularUsers = usersList.filter((u) => u.role !== 'listener').filter(searchFilter);
+
+  // Tab 2: Listeners (role === 'listener')
+  const listenersList = usersList.filter((u) => u.role === 'listener').filter(searchFilter);
+
+  const onlineListenersCount = usersList.filter((u) => u.role === 'listener' && !isListenerOffline(u)).length;
+
+  if (!isUserAdmin(currentUser)) {
+    return (
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/90 p-4">
+        <div className="bg-[#16161C] border border-red-500/40 rounded-3xl p-6 text-center max-w-sm">
+          <AlertCircle className="w-12 h-12 text-red-500 mx-auto mb-3" />
+          <h3 className="text-lg font-bold text-white">Access Denied</h3>
+          <p className="text-xs text-zinc-400 mt-1">This panel is protected for platform administrators only.</p>
+          <button
+            onClick={onClose}
+            className="mt-4 px-6 py-2 rounded-xl bg-zinc-800 text-white text-xs font-bold cursor-pointer"
+          >
+            Close
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="fixed inset-0 z-50 flex flex-col bg-[#0B0B0E] text-white overflow-y-auto">
@@ -247,20 +331,20 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onClose }) => {
             <Shield className="w-5 h-5" />
           </div>
           <div>
-            <h2 className="font-bold text-sm tracking-wide">Meet Up Admin Panel</h2>
-            <p className="text-[10px] text-zinc-400">Direct Firestore Management</p>
+            <h2 className="font-bold text-sm tracking-wide">Meet Up Admin Dashboard</h2>
+            <p className="text-[10px] text-zinc-400">Direct Firestore & Firebase Auth Management</p>
           </div>
         </div>
 
         <button
           onClick={onClose}
-          className="p-1.5 rounded-full text-zinc-400 hover:text-white hover:bg-[#23232C] transition"
+          className="p-1.5 rounded-full text-zinc-400 hover:text-white hover:bg-[#23232C] transition cursor-pointer"
         >
           <X className="w-5 h-5" />
         </button>
       </div>
 
-      <div className="max-w-4xl w-full mx-auto p-4 space-y-4 pb-20">
+      <div className="max-w-6xl w-full mx-auto p-4 space-y-4 pb-24">
         {/* Metrics Grid */}
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
           <div className="p-3.5 bg-[#16161C] border border-[#23232C] rounded-2xl">
@@ -296,22 +380,33 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onClose }) => {
           </div>
         </div>
 
-        {/* Tab Navigation */}
-        <div className="flex items-center gap-1.5 p-1 bg-[#16161C] border border-[#23232C] rounded-2xl overflow-x-auto">
+        {/* Tab Navigation: Users, Listeners, Reports, Applications, Calls */}
+        <div className="flex items-center gap-1.5 p-1 bg-[#16161C] border border-[#23232C] rounded-2xl overflow-x-auto no-scrollbar">
           <button
             onClick={() => setActiveTab('users')}
-            className={`px-4 py-2 rounded-xl text-xs font-bold transition shrink-0 ${
+            className={`px-4 py-2 rounded-xl text-xs font-bold transition shrink-0 cursor-pointer ${
               activeTab === 'users'
                 ? 'bg-[#FF69B4] text-white shadow-[0_0_10px_rgba(255,105,180,0.5)]'
                 : 'text-zinc-400 hover:text-white'
             }`}
           >
-            All Users ({usersList.length})
+            Users ({regularUsers.length})
+          </button>
+
+          <button
+            onClick={() => setActiveTab('listeners')}
+            className={`px-4 py-2 rounded-xl text-xs font-bold transition shrink-0 cursor-pointer ${
+              activeTab === 'listeners'
+                ? 'bg-[#FF69B4] text-white shadow-[0_0_10px_rgba(255,105,180,0.5)]'
+                : 'text-zinc-400 hover:text-white'
+            }`}
+          >
+            Listeners ({listenersList.length})
           </button>
 
           <button
             onClick={() => setActiveTab('reports')}
-            className={`px-4 py-2 rounded-xl text-xs font-bold transition shrink-0 ${
+            className={`px-4 py-2 rounded-xl text-xs font-bold transition shrink-0 cursor-pointer ${
               activeTab === 'reports'
                 ? 'bg-[#FF69B4] text-white shadow-[0_0_10px_rgba(255,105,180,0.5)]'
                 : 'text-zinc-400 hover:text-white'
@@ -322,7 +417,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onClose }) => {
 
           <button
             onClick={() => setActiveTab('applications')}
-            className={`px-4 py-2 rounded-xl text-xs font-bold transition shrink-0 ${
+            className={`px-4 py-2 rounded-xl text-xs font-bold transition shrink-0 cursor-pointer ${
               activeTab === 'applications'
                 ? 'bg-[#FF69B4] text-white shadow-[0_0_10px_rgba(255,105,180,0.5)]'
                 : 'text-zinc-400 hover:text-white'
@@ -333,7 +428,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onClose }) => {
 
           <button
             onClick={() => setActiveTab('calls')}
-            className={`px-4 py-2 rounded-xl text-xs font-bold transition shrink-0 ${
+            className={`px-4 py-2 rounded-xl text-xs font-bold transition shrink-0 cursor-pointer ${
               activeTab === 'calls'
                 ? 'bg-[#FF69B4] text-white shadow-[0_0_10px_rgba(255,105,180,0.5)]'
                 : 'text-zinc-400 hover:text-white'
@@ -343,120 +438,196 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onClose }) => {
           </button>
         </div>
 
-        {/* Tab 1: All Users Table */}
-        {activeTab === 'users' && (
+        {/* Tab 1 (Users) & Tab 2 (Listeners): Table View with 6 columns & search bar */}
+        {(activeTab === 'users' || activeTab === 'listeners') && (
           <div className="space-y-3">
-            {/* Search */}
+            {/* Search Bar */}
             <div className="relative">
-              <Search className="w-4 h-4 text-zinc-500 absolute left-3 top-3" />
+              <Search className="w-4 h-4 text-zinc-500 absolute left-3.5 top-1/2 -translate-y-1/2" />
               <input
                 type="text"
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="Search users by name, email, location..."
-                className="w-full bg-[#16161C] border border-[#23232C] rounded-xl pl-9 pr-4 py-2.5 text-xs text-white placeholder-zinc-500 focus:outline-none focus:border-[#FF69B4]"
+                placeholder={`Search ${activeTab === 'users' ? 'users' : 'listeners'} by name or email ID...`}
+                className="w-full bg-[#16161C] border border-[#23232C] rounded-xl pl-10 pr-10 py-2.5 text-xs text-white placeholder-zinc-500 focus:outline-none focus:border-[#FF69B4]"
               />
+              {searchQuery && (
+                <button
+                  onClick={() => setSearchQuery('')}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 p-1 text-zinc-400 hover:text-white"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              )}
             </div>
 
-            <div className="bg-[#16161C] border border-[#23232C] rounded-2xl divide-y divide-zinc-800/60 overflow-hidden">
-              {filteredUsers.map((user) => (
-                <div
-                  key={user.uid}
-                  className="p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3 hover:bg-[#1C1C24] transition"
-                >
-                  <div className="flex items-center gap-3">
-                    <img
-                      src={getUserAvatarUrl(user)}
-                      alt={user.name}
-                      onError={(e) => {
-                        (e.currentTarget as HTMLImageElement).src = 'https://randomuser.me/api/portraits/women/11.jpg';
-                      }}
-                      className="w-10 h-10 rounded-full object-cover border border-zinc-700"
-                    />
-                    <div>
-                      <div className="flex items-center gap-2">
-                        <span className="text-xs font-bold text-white">{user.name}</span>
-                        <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold uppercase ${
-                          user.role === 'admin'
-                            ? 'bg-purple-500/20 text-purple-400'
-                            : user.role === 'listener'
-                            ? 'bg-emerald-500/20 text-emerald-400'
-                            : 'bg-zinc-800 text-zinc-400'
-                        }`}>
-                          {user.role}
-                        </span>
-                        {user.role === 'listener' && (
-                          isListenerOffline(user) ? (
-                            <span className="px-1.5 py-0.5 rounded bg-zinc-800 text-zinc-400 text-[9px] font-bold border border-zinc-700">
-                              OFFLINE
-                            </span>
-                          ) : (
-                            <span className="px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-400 text-[9px] font-bold border border-emerald-500/30">
-                              ONLINE
-                            </span>
-                          )
-                        )}
-                        {user.is_blocked && (
-                          <span className="px-1.5 py-0.5 rounded bg-red-500/20 text-red-400 text-[9px] font-bold">
-                            BLOCKED
-                          </span>
-                        )}
-                      </div>
-                      <div className="text-[11px] text-zinc-400 mt-0.5">{user.email} • {user.location}</div>
-                    </div>
-                  </div>
+            {/* Table Container */}
+            <div className="bg-[#16161C] border border-[#23232C] rounded-2xl overflow-hidden shadow-xl">
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-xs border-collapse">
+                  <thead>
+                    <tr className="bg-[#1D1D26] text-zinc-400 font-bold uppercase tracking-wider text-[10px] border-b border-[#2A2A36]">
+                      <th className="py-3 px-3.5 w-16 text-center">Profile Pic</th>
+                      <th className="py-3 px-3.5">Name</th>
+                      <th className="py-3 px-3.5">Email ID</th>
+                      <th className="py-3 px-3.5">Mobile Number</th>
+                      <th className="py-3 px-3.5">Status</th>
+                      <th className="py-3 px-3.5">Joined Date</th>
+                      <th className="py-3 px-3.5 text-right">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-[#23232C]">
+                    {(activeTab === 'users' ? regularUsers : listenersList).length === 0 ? (
+                      <tr>
+                        <td colSpan={7} className="py-12 text-center text-zinc-500 text-xs">
+                          {loading ? 'Loading records from Firestore...' : `No ${activeTab} found matching search.`}
+                        </td>
+                      </tr>
+                    ) : (
+                      (activeTab === 'users' ? regularUsers : listenersList).map((user) => {
+                        const isPhoneRevealed = !!revealedPhones[user.uid];
+                        const isUserOnline = user.status === 'online' && !isListenerOffline(user);
+                        const isAvailable = activeTab === 'listeners' ? isUserOnline : user.status === 'online';
 
-                  <div className="flex items-center gap-2 self-end sm:self-center">
-                    <div className="text-right mr-2">
-                      <span className="text-xs font-bold text-amber-300 block">{user.coins_balance} Coins</span>
-                      <span className="text-[10px] text-cyan-400">{user.diamonds_balance} Dia</span>
-                    </div>
+                        return (
+                          <tr
+                            key={user.uid}
+                            onClick={() => setSelectedUserDetail(user)}
+                            className="hover:bg-[#1D1D28] transition cursor-pointer group"
+                            title="Click to view full user details"
+                          >
+                            {/* 1. Profile Pic */}
+                            <td className="py-3 px-3.5 text-center">
+                              <img
+                                src={getUserAvatarUrl(user)}
+                                alt={user.name}
+                                onError={(e) => {
+                                  (e.currentTarget as HTMLImageElement).src =
+                                    'https://randomuser.me/api/portraits/women/11.jpg';
+                                }}
+                                className="w-9 h-9 rounded-full object-cover border border-zinc-700 mx-auto"
+                              />
+                            </td>
 
-                    {user.role === 'listener' && (
-                      <button
-                        onClick={() => handleTogglePresence(user)}
-                        className={`p-2 rounded-xl text-xs flex items-center gap-1 transition ${
-                          isListenerOffline(user)
-                            ? 'bg-zinc-800 hover:bg-zinc-700 text-zinc-300'
-                            : 'bg-amber-500/20 hover:bg-amber-500/30 text-amber-300'
-                        }`}
-                        title={isListenerOffline(user) ? 'Set Available (Online) in Firestore' : 'Set Unavailable (Offline) in Firestore'}
-                      >
-                        <Radio className="w-3.5 h-3.5" />
-                        <span className="text-[10px] hidden sm:inline">{isListenerOffline(user) ? 'Online' : 'Unavailable'}</span>
-                      </button>
+                            {/* 2. Name */}
+                            <td className="py-3 px-3.5">
+                              <div className="font-bold text-white group-hover:text-[#FF69B4] transition flex items-center gap-1.5">
+                                <span>{user.name}</span>
+                                {user.is_blocked && (
+                                  <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-red-500/20 text-red-400">
+                                    BANNED
+                                  </span>
+                                )}
+                              </div>
+                              <div className="text-[10px] text-zinc-500">{user.location || 'India'}</div>
+                            </td>
+
+                            {/* 3. Email ID */}
+                            <td className="py-3 px-3.5 font-mono text-zinc-300">
+                              {user.email || 'N/A'}
+                            </td>
+
+                            {/* 4. Mobile Number (show masked like 98XXXXXX10, click to reveal full) */}
+                            <td className="py-3 px-3.5" onClick={(e) => e.stopPropagation()}>
+                              <button
+                                type="button"
+                                onClick={(e) => togglePhoneReveal(user.uid, e)}
+                                className="inline-flex items-center gap-1.5 px-2 py-1 rounded-lg bg-[#20202C] hover:bg-[#282838] border border-zinc-700/60 font-mono text-[11px] text-zinc-200 transition cursor-pointer"
+                                title={isPhoneRevealed ? 'Click to mask phone' : 'Click to reveal full phone'}
+                              >
+                                <span>
+                                  {isPhoneRevealed
+                                    ? (user.phone || 'N/A')
+                                    : maskPhoneNumber(user.phone)}
+                                </span>
+                                {isPhoneRevealed ? (
+                                  <EyeOff className="w-3.5 h-3.5 text-zinc-400" />
+                                ) : (
+                                  <Eye className="w-3.5 h-3.5 text-[#FF69B4]" />
+                                )}
+                              </button>
+                            </td>
+
+                            {/* 5. Status (Available / Not Available) */}
+                            <td className="py-3 px-3.5">
+                              {isAvailable ? (
+                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/15 border border-emerald-500/40 text-emerald-400">
+                                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+                                  Available
+                                </span>
+                              ) : (
+                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-zinc-800 text-zinc-400 border border-zinc-700">
+                                  <span className="w-1.5 h-1.5 rounded-full bg-zinc-500"></span>
+                                  Not Available
+                                </span>
+                              )}
+                            </td>
+
+                            {/* 6. Joined Date */}
+                            <td className="py-3 px-3.5 text-zinc-400 font-medium">
+                              {formatJoinedDate(user.created_at)}
+                            </td>
+
+                            {/* Actions */}
+                            <td className="py-3 px-3.5 text-right" onClick={(e) => e.stopPropagation()}>
+                              <div className="flex items-center justify-end gap-1.5">
+                                {user.role === 'listener' && (
+                                  <button
+                                    onClick={() => handleTogglePresence(user)}
+                                    className={`p-1.5 rounded-lg text-xs transition ${
+                                      isListenerOffline(user)
+                                        ? 'bg-zinc-800 hover:bg-zinc-700 text-zinc-400'
+                                        : 'bg-emerald-500/20 text-emerald-300 hover:bg-emerald-500/30'
+                                    }`}
+                                    title={isListenerOffline(user) ? 'Set Available' : 'Set Not Available'}
+                                  >
+                                    <Radio className="w-3.5 h-3.5" />
+                                  </button>
+                                )}
+
+                                <button
+                                  onClick={() => {
+                                    setEditingUser(user);
+                                    setCoinInput(user.coins_balance || 0);
+                                  }}
+                                  className="p-1.5 rounded-lg bg-[#242432] hover:bg-[#303042] text-zinc-300 transition"
+                                  title="Edit Coins"
+                                >
+                                  <Edit3 className="w-3.5 h-3.5" />
+                                </button>
+
+                                <button
+                                  onClick={() => handleToggleBlock(user)}
+                                  className={`p-1.5 rounded-lg transition ${
+                                    user.is_blocked
+                                      ? 'bg-emerald-500/20 text-emerald-400 hover:bg-emerald-500/30'
+                                      : 'bg-red-500/20 text-red-400 hover:bg-red-500/30'
+                                  }`}
+                                  title={user.is_blocked ? 'Unban User' : 'Ban User'}
+                                >
+                                  <Ban className="w-3.5 h-3.5" />
+                                </button>
+
+                                <button
+                                  onClick={() => setSelectedUserDetail(user)}
+                                  className="px-2 py-1 rounded-lg bg-[#FF69B4]/15 hover:bg-[#FF69B4]/25 text-[#FF69B4] text-[11px] font-semibold transition"
+                                >
+                                  Details
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })
                     )}
-
-                    <button
-                      onClick={() => {
-                        setEditingUser(user);
-                        setCoinInput(user.coins_balance);
-                      }}
-                      className="p-2 rounded-xl bg-[#23232C] hover:bg-[#2F2F3D] text-zinc-300 text-xs flex items-center gap-1 transition"
-                      title="Edit Coins"
-                    >
-                      <Edit3 className="w-3.5 h-3.5" />
-                    </button>
-
-                    <button
-                      onClick={() => handleToggleBlock(user)}
-                      className={`p-2 rounded-xl text-xs flex items-center gap-1 transition ${
-                        user.is_blocked
-                          ? 'bg-emerald-500/20 text-emerald-400 hover:bg-emerald-500/30'
-                          : 'bg-red-500/20 text-red-400 hover:bg-red-500/30'
-                      }`}
-                      title={user.is_blocked ? 'Unblock User' : 'Block User'}
-                    >
-                      <Ban className="w-3.5 h-3.5" />
-                    </button>
-                  </div>
-                </div>
-              ))}
+                  </tbody>
+                </table>
+              </div>
             </div>
           </div>
         )}
 
-        {/* Tab 2: Reports */}
+        {/* Tab 3: Reports */}
         {activeTab === 'reports' && (
           <div className="space-y-3">
             {reportsList.length === 0 ? (
@@ -491,16 +662,16 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onClose }) => {
                   <div className="flex justify-end gap-2 pt-2">
                     <button
                       onClick={() => handleDismissReport(report.id)}
-                      className="px-3 py-1.5 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-xs text-zinc-300 transition"
+                      className="px-3 py-1.5 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-xs text-zinc-300 transition cursor-pointer"
                     >
                       Dismiss
                     </button>
                     <button
                       onClick={async () => {
-                        await updateDoc(doc(db, 'users', report.reported_id), { is_blocked: true });
+                        await updateDoc(doc(db, 'users', report.reported_id), { is_blocked: true, isBlocked: true });
                         alert(`User ${report.reported_name || report.reported_id} blocked.`);
                       }}
-                      className="px-3 py-1.5 rounded-xl bg-red-500 hover:bg-red-600 text-xs font-bold text-white transition"
+                      className="px-3 py-1.5 rounded-xl bg-red-500 hover:bg-red-600 text-xs font-bold text-white transition cursor-pointer"
                     >
                       Ban User
                     </button>
@@ -511,7 +682,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onClose }) => {
           </div>
         )}
 
-        {/* Tab 3: Listener Applications */}
+        {/* Tab 4: Listener Applications */}
         {activeTab === 'applications' && (
           <div className="space-y-3">
             {applicationsList.length === 0 ? (
@@ -542,7 +713,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onClose }) => {
 
                   <div className="text-xs text-zinc-400 space-y-1">
                     <div><span className="text-zinc-500">Languages:</span> {app.languages?.join(', ')}</div>
-                    <div><span className="text-zinc-500">Proposed Rates:</span> {app.voice_rate} Voice / {app.video_rate} Video coins/min</div>
+                    <div>
+                      <span className="text-zinc-500">Proposed Rates:</span> {app.voice_rate} Voice / {app.video_rate} Video coins/min
+                    </div>
+                    <div>
+                      <span className="text-zinc-500">Allow Video Calls:</span> {app.allowVideoCalls !== false ? 'YES (Audio + Video)' : 'NO (Audio Only)'}
+                    </div>
                     {app.experience && (
                       <p className="bg-[#0B0B0E] p-2.5 rounded-xl border border-zinc-800 text-zinc-300">
                         {app.experience}
@@ -554,13 +730,13 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onClose }) => {
                     <div className="flex justify-end gap-2 pt-1">
                       <button
                         onClick={() => handleRejectApplication(app.id)}
-                        className="px-3 py-1.5 rounded-xl bg-zinc-800 text-xs font-semibold text-zinc-300 hover:text-white"
+                        className="px-3 py-1.5 rounded-xl bg-zinc-800 text-xs font-semibold text-zinc-300 hover:text-white cursor-pointer"
                       >
                         Reject
                       </button>
                       <button
                         onClick={() => handleApproveApplication(app)}
-                        className="px-4 py-1.5 rounded-xl bg-emerald-500 hover:bg-emerald-600 text-xs font-bold text-white transition flex items-center gap-1 shadow-sm"
+                        className="px-4 py-1.5 rounded-xl bg-emerald-500 hover:bg-emerald-600 text-xs font-bold text-white transition flex items-center gap-1 shadow-sm cursor-pointer"
                       >
                         <Check className="w-3.5 h-3.5" />
                         Approve as Listener
@@ -573,7 +749,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onClose }) => {
           </div>
         )}
 
-        {/* Tab 4: Call Logs */}
+        {/* Tab 5: Call Logs */}
         {activeTab === 'calls' && (
           <div className="space-y-2">
             {callLogsList.length === 0 ? (
@@ -604,6 +780,183 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onClose }) => {
         )}
       </div>
 
+      {/* User Details Popup (Requirement 1: Click on user opens details popup) */}
+      {selectedUserDetail && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 backdrop-blur-md p-4 animate-in fade-in"
+          onClick={() => setSelectedUserDetail(null)}
+        >
+          <div
+            className="w-full max-w-md bg-[#16161E] border border-[#2A2A3A] rounded-3xl p-5 shadow-2xl relative space-y-4 max-h-[90vh] overflow-y-auto"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Header */}
+            <div className="flex items-center justify-between border-b border-zinc-800 pb-3">
+              <div className="flex items-center gap-3">
+                <img
+                  src={getUserAvatarUrl(selectedUserDetail)}
+                  alt={selectedUserDetail.name}
+                  className="w-12 h-12 rounded-full object-cover border-2 border-[#FF69B4]"
+                />
+                <div>
+                  <div className="flex items-center gap-2">
+                    <h3 className="font-bold text-white text-base">{selectedUserDetail.name}</h3>
+                    <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase ${
+                      selectedUserDetail.role === 'listener'
+                        ? 'bg-emerald-500/20 text-emerald-400'
+                        : selectedUserDetail.role === 'admin'
+                        ? 'bg-purple-500/20 text-purple-400'
+                        : 'bg-zinc-800 text-zinc-300'
+                    }`}>
+                      {selectedUserDetail.role}
+                    </span>
+                  </div>
+                  <p className="text-xs text-zinc-400">UID: {selectedUserDetail.uid.slice(0, 12)}...</p>
+                </div>
+              </div>
+
+              <button
+                onClick={() => setSelectedUserDetail(null)}
+                className="p-1.5 rounded-full text-zinc-400 hover:text-white hover:bg-zinc-800 transition"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* User Details Grid */}
+            <div className="grid grid-cols-2 gap-2.5 text-xs">
+              <div className="p-3 rounded-xl bg-[#0F0F14] border border-zinc-800 space-y-0.5">
+                <span className="text-[10px] text-zinc-500 font-semibold uppercase flex items-center gap-1">
+                  <Mail className="w-3 h-3 text-blue-400" /> Email ID
+                </span>
+                <p className="font-mono text-zinc-200 truncate" title={selectedUserDetail.email}>
+                  {selectedUserDetail.email || 'N/A'}
+                </p>
+              </div>
+
+              <div className="p-3 rounded-xl bg-[#0F0F14] border border-zinc-800 space-y-0.5">
+                <span className="text-[10px] text-zinc-500 font-semibold uppercase flex items-center gap-1">
+                  <Phone className="w-3 h-3 text-emerald-400" /> Mobile Number
+                </span>
+                <p className="font-mono font-bold text-white">
+                  {selectedUserDetail.phone || 'N/A'}
+                </p>
+              </div>
+
+              <div className="p-3 rounded-xl bg-[#0F0F14] border border-zinc-800 space-y-0.5">
+                <span className="text-[10px] text-zinc-500 font-semibold uppercase flex items-center gap-1">
+                  <Radio className="w-3 h-3 text-emerald-400" /> Status
+                </span>
+                <p className="font-semibold">
+                  {selectedUserDetail.status === 'online' && !isListenerOffline(selectedUserDetail) ? (
+                    <span className="text-emerald-400">Available (Online)</span>
+                  ) : (
+                    <span className="text-zinc-400">Not Available (Offline)</span>
+                  )}
+                </p>
+              </div>
+
+              <div className="p-3 rounded-xl bg-[#0F0F14] border border-zinc-800 space-y-0.5">
+                <span className="text-[10px] text-zinc-500 font-semibold uppercase flex items-center gap-1">
+                  <Calendar className="w-3 h-3 text-amber-400" /> Joined Date
+                </span>
+                <p className="text-zinc-200">
+                  {formatJoinedDate(selectedUserDetail.created_at)}
+                </p>
+              </div>
+
+              <div className="p-3 rounded-xl bg-[#0F0F14] border border-zinc-800 space-y-0.5">
+                <span className="text-[10px] text-zinc-500 font-semibold uppercase flex items-center gap-1">
+                  <MapPin className="w-3 h-3 text-[#FF69B4]" /> City & State
+                </span>
+                <p className="text-zinc-200 truncate">
+                  {selectedUserDetail.city || selectedUserDetail.location || 'Chennai, Tamil Nadu'}
+                </p>
+              </div>
+
+              <div className="p-3 rounded-xl bg-[#0F0F14] border border-zinc-800 space-y-0.5">
+                <span className="text-[10px] text-zinc-500 font-semibold uppercase flex items-center gap-1">
+                  <Coins className="w-3 h-3 text-amber-400" /> Balances
+                </span>
+                <p className="text-amber-300 font-bold">
+                  {selectedUserDetail.coins_balance || 0} Coins • {selectedUserDetail.diamonds_balance || 0} Dia
+                </p>
+              </div>
+            </div>
+
+            {/* Listener Specific Preferences */}
+            {selectedUserDetail.role === 'listener' && (
+              <div className="p-3 bg-[#0F0F14] border border-zinc-800 rounded-2xl space-y-1.5 text-xs">
+                <span className="text-[10px] text-zinc-500 font-bold uppercase">Listener Settings</span>
+                <div className="flex items-center justify-between text-zinc-300">
+                  <span>Allow Video Calls:</span>
+                  <span className={`font-bold ${selectedUserDetail.allowVideoCalls !== false ? 'text-emerald-400' : 'text-amber-400'}`}>
+                    {selectedUserDetail.allowVideoCalls !== false ? 'YES (Audio + Video)' : 'NO (Audio Only)'}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between text-zinc-300">
+                  <span>Call Rates:</span>
+                  <span className="text-amber-300 font-bold">
+                    {selectedUserDetail.audio_rate_coins || selectedUserDetail.voice_rate || 20} Voice / {selectedUserDetail.video_rate_coins || selectedUserDetail.video_rate || 50} Video coins/m
+                  </span>
+                </div>
+              </div>
+            )}
+
+            {/* Bio if any */}
+            {selectedUserDetail.bio && (
+              <div className="p-3 bg-[#0F0F14] border border-zinc-800 rounded-2xl text-xs text-zinc-300">
+                <span className="text-[10px] text-zinc-500 font-bold uppercase block mb-1">Bio</span>
+                <p>{selectedUserDetail.bio}</p>
+              </div>
+            )}
+
+            {/* Admin Action Buttons */}
+            <div className="flex flex-wrap gap-2 pt-2 border-t border-zinc-800">
+              {selectedUserDetail.role === 'listener' && (
+                <button
+                  type="button"
+                  onClick={() => handleTogglePresence(selectedUserDetail)}
+                  className={`flex-1 py-2.5 px-3 rounded-xl text-xs font-bold transition flex items-center justify-center gap-1.5 ${
+                    isListenerOffline(selectedUserDetail)
+                      ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/40 hover:bg-emerald-500/30'
+                      : 'bg-zinc-800 text-zinc-300 hover:bg-zinc-700'
+                  }`}
+                >
+                  <Radio className="w-3.5 h-3.5" />
+                  <span>{isListenerOffline(selectedUserDetail) ? 'Make Available' : 'Make Unavailable'}</span>
+                </button>
+              )}
+
+              <button
+                type="button"
+                onClick={() => {
+                  setEditingUser(selectedUserDetail);
+                  setCoinInput(selectedUserDetail.coins_balance || 0);
+                }}
+                className="flex-1 py-2.5 px-3 rounded-xl bg-[#23232C] hover:bg-[#2F2F3D] text-white text-xs font-bold flex items-center justify-center gap-1.5 transition"
+              >
+                <Edit3 className="w-3.5 h-3.5" />
+                <span>Edit Coins</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => handleToggleBlock(selectedUserDetail)}
+                className={`flex-1 py-2.5 px-3 rounded-xl text-xs font-bold transition flex items-center justify-center gap-1.5 ${
+                  selectedUserDetail.is_blocked
+                    ? 'bg-emerald-500/20 text-emerald-400 hover:bg-emerald-500/30'
+                    : 'bg-red-500/20 text-red-400 hover:bg-red-500/30'
+                }`}
+              >
+                <Ban className="w-3.5 h-3.5" />
+                <span>{selectedUserDetail.is_blocked ? 'Unban User' : 'Ban User'}</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Edit Coins Modal */}
       {editingUser && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4">
@@ -618,13 +971,13 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onClose }) => {
             <div className="flex gap-2">
               <button
                 onClick={() => setEditingUser(null)}
-                className="flex-1 py-2 rounded-xl bg-[#23232C] text-xs font-semibold text-zinc-300"
+                className="flex-1 py-2 rounded-xl bg-[#23232C] text-xs font-semibold text-zinc-300 cursor-pointer"
               >
                 Cancel
               </button>
               <button
                 onClick={handleSaveCoins}
-                className="flex-1 py-2 rounded-xl bg-[#FF69B4] text-xs font-bold text-white"
+                className="flex-1 py-2 rounded-xl bg-[#FF69B4] text-xs font-bold text-white cursor-pointer"
               >
                 Save Changes
               </button>

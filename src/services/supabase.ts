@@ -1,19 +1,32 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { UserProfile } from '../types';
+import { isAdminEmail } from '../utils/admin';
 
 // Default Supabase config with localStorage override support
 const STORAGE_KEY_URL = 'meetup_supabase_url';
 const STORAGE_KEY_KEY = 'meetup_supabase_key';
 
-// Read from env or localStorage or fallback demo configuration
+// Read from env (SUPABASE_URL, SUPABASE_ANON_KEY, VITE_SUPABASE_URL, VITE_SUPABASE_ANON_KEY) or localStorage
 export const getSupabaseCredentials = () => {
-  const customUrl = localStorage.getItem(STORAGE_KEY_URL);
-  const customKey = localStorage.getItem(STORAGE_KEY_KEY);
-  
-  const url = customUrl || (import.meta as any).env?.VITE_SUPABASE_URL || 'https://xyzcompany.supabase.co';
-  const key = customKey || (import.meta as any).env?.VITE_SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.dummy_anon_key';
-  
-  const isConfigured = !!customUrl || (!!(import.meta as any).env?.VITE_SUPABASE_URL && (import.meta as any).env.VITE_SUPABASE_URL !== 'https://xyzcompany.supabase.co');
+  const customUrl = typeof window !== 'undefined' ? localStorage.getItem(STORAGE_KEY_URL) : null;
+  const customKey = typeof window !== 'undefined' ? localStorage.getItem(STORAGE_KEY_KEY) : null;
+
+  const envUrl =
+    (import.meta as any).env?.SUPABASE_URL ||
+    (import.meta as any).env?.VITE_SUPABASE_URL ||
+    (typeof process !== 'undefined' ? process.env?.SUPABASE_URL || process.env?.VITE_SUPABASE_URL : '');
+
+  const envKey =
+    (import.meta as any).env?.SUPABASE_ANON_KEY ||
+    (import.meta as any).env?.VITE_SUPABASE_ANON_KEY ||
+    (typeof process !== 'undefined' ? process.env?.SUPABASE_ANON_KEY || process.env?.VITE_SUPABASE_ANON_KEY : '');
+
+  const url = (customUrl || envUrl || 'https://xyzcompany.supabase.co').trim();
+  const key = (customKey || envKey || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.dummy_anon_key').trim();
+
+  const isConfigured =
+    !!customUrl ||
+    (!!envUrl && envUrl !== 'https://xyzcompany.supabase.co' && !envUrl.includes('placeholder'));
 
   return { url, key, isConfigured };
 };
@@ -28,7 +41,12 @@ export const getSupabaseClient = (): SupabaseClient => {
     lastUrl = url;
     lastKey = key;
     cachedClient = createClient(url, key, {
-      auth: { persistSession: false },
+      auth: {
+        persistSession: true,
+        autoRefreshToken: true,
+        detectSessionInUrl: true,
+        storageKey: 'meetup_supabase_auth_token',
+      },
       realtime: { params: { eventsPerSecond: 10 } }
     });
   }
@@ -36,6 +54,7 @@ export const getSupabaseClient = (): SupabaseClient => {
 };
 
 export const setSupabaseCredentials = (url: string, key: string) => {
+  if (typeof window === 'undefined') return;
   if (!url || !key) {
     localStorage.removeItem(STORAGE_KEY_URL);
     localStorage.removeItem(STORAGE_KEY_KEY);
@@ -46,21 +65,347 @@ export const setSupabaseCredentials = (url: string, key: string) => {
   cachedClient = null;
 };
 
+/**
+ * Supabase Auth: Sign Up with email & password
+ * Creates auth user and initializes record in 'profiles' table.
+ */
+export const signUpWithSupabase = async (params: {
+  name: string;
+  email: string;
+  password: string;
+}) => {
+  const supabase = getSupabaseClient();
+  const trimmedEmail = params.email.trim().toLowerCase();
+  const trimmedName = params.name.trim();
+
+  // 1. Sign up user via Supabase Auth
+  const { data, error } = await supabase.auth.signUp({
+    email: trimmedEmail,
+    password: params.password,
+    options: {
+      data: {
+        name: trimmedName,
+        full_name: trimmedName,
+      },
+    },
+  });
+
+  if (error) {
+    const msg = error.message.toLowerCase();
+    if (msg.includes('already registered') || msg.includes('already exists') || msg.includes('duplicate')) {
+      throw new Error('An account with this email already exists. Please log in instead.');
+    }
+    throw new Error(error.message || 'Failed to create account. Please try again.');
+  }
+
+  // Check if email already existed (Supabase returns empty identities array when user already exists)
+  if (data.user?.identities && data.user.identities.length === 0) {
+    throw new Error('An account with this email already exists. Please log in instead.');
+  }
+
+  const user = data.user;
+  if (!user) {
+    throw new Error('Registration failed: no user returned.');
+  }
+
+  // 2. Create user profile in 'profiles' table
+  const isAdmin = isAdminEmail(trimmedEmail);
+  try {
+    const profilePayloadWithAdmin: Record<string, any> = {
+      id: user.id,
+      name: trimmedName,
+      email: trimmedEmail,
+      role: isAdmin ? 'admin' : 'user',
+      is_admin: isAdmin,
+      created_at: new Date().toISOString(),
+    };
+    const { error: profileError } = await supabase
+      .from('profiles')
+      .upsert(profilePayloadWithAdmin, { onConflict: 'id' });
+
+    if (profileError) {
+      console.warn('[Supabase Profiles] Warning on initial insert with role:', profileError.message);
+      // Fallback in case 'role' or 'is_admin' columns are not present in Supabase table
+      await supabase
+        .from('profiles')
+        .upsert({
+          id: user.id,
+          name: trimmedName,
+          email: trimmedEmail,
+          created_at: new Date().toISOString(),
+        }, { onConflict: 'id' });
+    }
+  } catch (err) {
+    console.warn('[Supabase Profiles] Profile insert warning:', err);
+  }
+
+  // Also sync to users table if available
+  try {
+    await supabase.from('users').upsert({
+      id: user.id,
+      uid: user.id,
+      name: trimmedName,
+      email: trimmedEmail,
+      role: isAdmin ? 'admin' : 'user',
+      is_admin: isAdmin,
+      coins_balance: isAdmin ? 9999 : 50,
+      created_at: new Date().toISOString(),
+    }, { onConflict: 'uid' });
+  } catch {}
+
+  return {
+    user,
+    session: data.session,
+    needsEmailConfirmation: !data.session,
+  };
+};
+
+/**
+ * Supabase Auth: Sign In with email & password
+ */
+export const signInWithSupabase = async (email: string, pass: string) => {
+  const supabase = getSupabaseClient();
+  const trimmedEmail = email.trim().toLowerCase();
+
+  const { data, error } = await supabase.auth.signInWithPassword({
+    email: trimmedEmail,
+    password: pass,
+  });
+
+  if (error) {
+    const msg = error.message.toLowerCase();
+    if (
+      msg.includes('invalid login credentials') ||
+      msg.includes('invalid credentials') ||
+      msg.includes('invalid_grant') ||
+      msg.includes('wrong password')
+    ) {
+      throw new Error('Invalid email or password. Please check your credentials and try again.');
+    }
+    if (msg.includes('user not found') || msg.includes('no user')) {
+      throw new Error('No account found with this email. Please create an account.');
+    }
+    if (msg.includes('email not confirmed')) {
+      throw new Error('Please confirm your email address before logging in, or check your spam folder.');
+    }
+    throw new Error(error.message || 'Login failed. Please check your credentials.');
+  }
+
+  if (!data.user) {
+    throw new Error('Login failed: no user returned.');
+  }
+
+  // When admin logs in, automatically ensure role = 'admin' and is_admin = true in profiles table
+  if (isAdminEmail(data.user.email)) {
+    try {
+      await supabase
+        .from('profiles')
+        .update({ role: 'admin', is_admin: true })
+        .eq('id', data.user.id);
+    } catch (e) {
+      console.warn('[Supabase Profiles] Admin role update notice:', e);
+    }
+    try {
+      await supabase
+        .from('users')
+        .update({ role: 'admin', is_admin: true, coins_balance: 9999 })
+        .eq('uid', data.user.id);
+    } catch {}
+  }
+
+  return {
+    user: data.user,
+    session: data.session,
+  };
+};
+
+/**
+ * Supabase Auth: Send Password Reset Email
+ */
+export const resetPasswordWithSupabase = async (email: string) => {
+  const supabase = getSupabaseClient();
+  const trimmedEmail = email.trim().toLowerCase();
+
+  const { error } = await supabase.auth.resetPasswordForEmail(trimmedEmail, {
+    redirectTo: typeof window !== 'undefined' ? `${window.location.origin}/login` : undefined,
+  });
+
+  if (error) {
+    throw new Error(error.message || 'Failed to send password reset email.');
+  }
+
+  return true;
+};
+
+/**
+ * Supabase Auth: Sign Out
+ */
+export const signOutFromSupabase = async () => {
+  try {
+    const supabase = getSupabaseClient();
+    await supabase.auth.signOut();
+  } catch (err) {
+    console.warn('[Supabase Auth] SignOut warning:', err);
+  }
+};
+
+/**
+ * Supabase Auth: Fetch profile from 'profiles' table
+ */
+export const fetchSupabaseProfile = async (userId: string) => {
+  try {
+    const supabase = getSupabaseClient();
+    const { data, error } = await supabase
+      .from('profiles')
+      .select('*')
+      .eq('id', userId)
+      .maybeSingle();
+
+    if (error) throw error;
+    return data;
+  } catch (err) {
+    console.warn('[Supabase Profiles] Fetch error:', err);
+    return null;
+  }
+};
+
+/**
+ * Updates user preferences in the Supabase 'profiles' and 'users' table
+ */
+export const updateSupabaseProfilePreference = async (
+  userId: string,
+  preference: { background_call_notify?: boolean; [key: string]: any }
+) => {
+  try {
+    const supabase = getSupabaseClient();
+    await supabase.from('profiles').update(preference).eq('id', userId);
+  } catch (err) {
+    console.warn('[Supabase Profiles] update preference notice:', err);
+  }
+
+  try {
+    const supabase = getSupabaseClient();
+    await supabase.from('users').update(preference).eq('uid', userId);
+  } catch (err) {
+    console.warn('[Supabase Users] update preference notice:', err);
+  }
+};
+
+/**
+ * Uploads a user photo to the Supabase Storage 'photos' bucket
+ * and returns the public URL.
+ *
+ * @param file The file or blob to upload
+ * @param userId Unique user ID for folder partitioning
+ * @returns Public URL of the uploaded photo in Supabase Storage
+ */
+export const uploadPhotoToSupabase = async (file: File | Blob, userId?: string): Promise<string> => {
+  const supabase = getSupabaseClient();
+  const { isConfigured, url } = getSupabaseCredentials();
+
+  if (!isConfigured) {
+    throw new Error('Supabase is not configured. Please set SUPABASE_URL and SUPABASE_ANON_KEY in your environment or Owner settings.');
+  }
+
+  // Determine file extension
+  let ext = 'jpg';
+  if (file instanceof File && file.name) {
+    const parts = file.name.split('.');
+    if (parts.length > 1) {
+      ext = parts.pop()?.toLowerCase() || 'jpg';
+    }
+  } else if (file.type) {
+    const sub = file.type.split('/')[1];
+    if (sub) ext = sub.replace('+xml', '');
+  }
+  const cleanExt = ext.replace(/[^a-z0-9]/g, '') || 'jpg';
+
+  const userFolder = userId ? `user_${userId.replace(/[^a-zA-Z0-9_-]/g, '_')}` : 'members';
+  const timestamp = Date.now();
+  const randomStr = Math.random().toString(36).substring(2, 8);
+  const fileName = `${timestamp}_${randomStr}.${cleanExt}`;
+  const filePath = `${userFolder}/${fileName}`;
+
+  const contentType = file.type || (cleanExt === 'png' ? 'image/png' : cleanExt === 'webp' ? 'image/webp' : 'image/jpeg');
+
+  // Upload to the public 'photos' bucket with upsert
+  const { data, error } = await supabase.storage
+    .from('photos')
+    .upload(filePath, file, {
+      contentType,
+      upsert: true,
+      cacheControl: '3600',
+    });
+
+  if (error) {
+    console.error('[Supabase Storage] Error uploading to photos bucket:', error);
+    throw new Error(`Failed to upload photo to Supabase 'photos' bucket: ${error.message}`);
+  }
+
+  // Retrieve public URL from Supabase Storage
+  const { data: publicUrlData } = supabase.storage
+    .from('photos')
+    .getPublicUrl(data?.path || filePath);
+
+  if (!publicUrlData?.publicUrl) {
+    throw new Error('Failed to retrieve public URL from Supabase Storage.');
+  }
+
+  console.log('[Supabase Storage] Photo uploaded successfully:', publicUrlData.publicUrl);
+  return publicUrlData.publicUrl;
+};
+
+/**
+ * Helper to delete a photo from the 'photos' bucket if needed
+ */
+export const deletePhotoFromSupabase = async (photoUrlOrPath: string): Promise<boolean> => {
+  try {
+    const supabase = getSupabaseClient();
+    let relativePath = photoUrlOrPath;
+    if (photoUrlOrPath.includes('/photos/')) {
+      relativePath = photoUrlOrPath.split('/photos/')[1];
+    }
+    const { error } = await supabase.storage.from('photos').remove([relativePath]);
+    if (error) {
+      console.warn('[Supabase Storage] Could not remove old photo:', error.message);
+      return false;
+    }
+    return true;
+  } catch {
+    return false;
+  }
+};
+
 // SQL Schema for Supabase SQL Editor
 export const SUPABASE_SQL_SCHEMA = `-- MEET UP SUPABASE SCHEMA
 -- Run this in your Supabase SQL Editor:
 
--- 1. Create users table
+-- 1. Create profiles table (synced with auth)
+create table if not exists public.profiles (
+  id uuid primary key references auth.users on delete cascade,
+  name text,
+  email text,
+  role text default 'user',
+  is_admin boolean default false,
+  created_at timestamp with time zone default timezone('utc'::text, now())
+);
+alter table public.profiles add column if not exists role text default 'user';
+alter table public.profiles add column if not exists is_admin boolean default false;
+alter table public.profiles add column if not exists background_call_notify boolean default true;
+
+-- 2. Create users table
 create table if not exists public.users (
   id text primary key,
   uid text unique not null,
   name text not null,
   email text,
   role text default 'user',
+  background_call_notify boolean default true,
   coins_balance int default 0,
   avatar_url text,
   created_at timestamp with time zone default timezone('utc'::text, now())
 );
+alter table public.users add column if not exists background_call_notify boolean default true;
 
 -- 2. Create rooms (meetings / calls) table
 create table if not exists public.rooms (

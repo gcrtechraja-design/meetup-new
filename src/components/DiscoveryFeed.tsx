@@ -30,9 +30,12 @@ import {
   AlertCircle, 
   Heart,
   SlidersHorizontal,
-  Zap
+  Zap,
+  MapPin,
+  RotateCcw
 } from 'lucide-react';
 import { isListenerOffline } from '../utils/presence';
+import { CITIES, findCity, calculateDistanceKm } from '../utils/cities';
 
 interface DiscoveryFeedProps {
   onVoiceCall: (user: UserProfile) => void;
@@ -74,6 +77,40 @@ export const DiscoveryFeed: React.FC<DiscoveryFeedProps> = ({
   const [selectedTag, setSelectedTag] = useState<string | null>(null);
   const [selectedLanguage, setSelectedLanguage] = useState<string>('all');
   const [filterOnlineOnly, setFilterOnlineOnly] = useState<boolean>(false);
+
+  // Location & Distance Filter (Requirement 3)
+  const defaultCityName = currentUser?.city || (currentUser?.location ? findCity(currentUser.location).name : 'Chennai');
+  const [selectedUserCity, setSelectedUserCity] = useState<string>(defaultCityName);
+  const [isDistanceFilterActive, setIsDistanceFilterActive] = useState<boolean>(false);
+  const [distanceRangeKm, setDistanceRangeKm] = useState<number>(200);
+
+  useEffect(() => {
+    if (currentUser?.city) {
+      setSelectedUserCity(currentUser.city);
+    } else if (currentUser?.location) {
+      setSelectedUserCity(findCity(currentUser.location).name);
+    }
+  }, [currentUser?.city, currentUser?.location]);
+
+  // Compute reference GPS coordinates based on selected city or user document
+  const userCoordinates = useMemo(() => {
+    const cityObj = CITIES.find((c) => c.name.toLowerCase() === selectedUserCity.toLowerCase()) || findCity(selectedUserCity);
+    const lat = currentUser?.city === selectedUserCity && currentUser?.latitude != null ? currentUser.latitude : cityObj.lat;
+    const lng = currentUser?.city === selectedUserCity && currentUser?.longitude != null ? currentUser.longitude : cityObj.lng;
+    return { lat, lng };
+  }, [selectedUserCity, currentUser]);
+
+  // Great-circle distance between current user and a listener
+  const getListenerDistance = useCallback((listener: UserProfile): number => {
+    let lat = listener.latitude;
+    let lng = listener.longitude;
+    if (lat == null || lng == null) {
+      const cityData = findCity(listener.city || listener.location);
+      lat = cityData.lat;
+      lng = cityData.lng;
+    }
+    return calculateDistanceKm(userCoordinates.lat, userCoordinates.lng, lat, lng);
+  }, [userCoordinates]);
 
   // Observer sentinel reference for auto-loading
   const sentinelRef = useRef<HTMLDivElement | null>(null);
@@ -355,9 +392,17 @@ export const DiscoveryFeed: React.FC<DiscoveryFeedProps> = ({
         }
       }
 
+      // Distance range filter (Requirement 3: "If user sets 200 km, show only listeners within 200 km. Update list dynamically when slider changes. Add Clear filter button to show all listeners")
+      if (isDistanceFilterActive) {
+        const dist = getListenerDistance(u);
+        if (dist > distanceRangeKm) {
+          return false;
+        }
+      }
+
       return true;
     });
-  }, [listeners, blockedUserIds, filterOnlineOnly, searchQuery, selectedTag, selectedLanguage]);
+  }, [listeners, blockedUserIds, filterOnlineOnly, searchQuery, selectedTag, selectedLanguage, isDistanceFilterActive, distanceRangeKm, getListenerDistance]);
 
   // Extract common interest tags
   const allTags = useMemo(() => {
@@ -390,6 +435,101 @@ export const DiscoveryFeed: React.FC<DiscoveryFeedProps> = ({
             <X className="w-3.5 h-3.5" />
           </button>
         )}
+      </div>
+
+      {/* Location Filter & Distance Range Slider (Requirement 3) */}
+      <div className="p-3.5 rounded-2xl bg-[#161622] border border-[#232334] space-y-2.5 shadow-sm">
+        <div className="flex items-center justify-between gap-2 flex-wrap">
+          <div className="flex items-center gap-2 min-w-0">
+            <div className="p-1.5 rounded-xl bg-[#ff4d8d]/15 text-[#ff4d8d] shrink-0">
+              <MapPin className="w-4 h-4" />
+            </div>
+            <div className="min-w-0">
+              <span className="text-[10px] font-bold text-zinc-400 uppercase tracking-wider block">
+                Location
+              </span>
+              <select
+                value={selectedUserCity}
+                onChange={(e) => setSelectedUserCity(e.target.value)}
+                className="bg-transparent text-xs font-bold text-white focus:outline-none cursor-pointer py-0.5 border-b border-dashed border-zinc-600 hover:border-[#ff4d8d]"
+              >
+                {CITIES.map((c) => (
+                  <option key={c.name} value={c.name} className="bg-[#161622] text-white">
+                    {c.name}, {c.state}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2">
+            {isDistanceFilterActive && (
+              <button
+                type="button"
+                onClick={() => {
+                  setIsDistanceFilterActive(false);
+                  setDistanceRangeKm(200);
+                }}
+                className="px-2.5 py-1 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-[11px] font-semibold flex items-center gap-1 transition cursor-pointer"
+                title="Clear filter to show all listeners"
+              >
+                <RotateCcw className="w-3 h-3" />
+                <span>Clear filter</span>
+              </button>
+            )}
+
+            <button
+              type="button"
+              onClick={() => setIsDistanceFilterActive(!isDistanceFilterActive)}
+              className={`px-3 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${
+                isDistanceFilterActive
+                  ? 'bg-[#ff4d8d] text-white shadow-[0_0_12px_rgba(255,77,141,0.4)]'
+                  : 'bg-[#202030] text-zinc-400 hover:text-white border border-[#2b2b3d]'
+              }`}
+            >
+              <SlidersHorizontal className="w-3.5 h-3.5" />
+              <span>{isDistanceFilterActive ? `≤ ${distanceRangeKm} km` : 'Filter Distance'}</span>
+            </button>
+          </div>
+        </div>
+
+        {/* Distance Range Slider: 1 km to 1000 km, default 200 km */}
+        <div className="space-y-1 pt-1 border-t border-zinc-800/60">
+          <div className="flex items-center justify-between text-[11px]">
+            <span className="text-zinc-400">
+              Max Distance:{' '}
+              <strong className={isDistanceFilterActive ? 'text-[#ff4d8d] text-xs' : 'text-zinc-200'}>
+                {distanceRangeKm} km
+              </strong>{' '}
+              {isDistanceFilterActive && (
+                <span className="text-[10px] text-[#ff4d8d]/80 font-medium">(Filter Active)</span>
+              )}
+            </span>
+            <span className="text-[10px] text-zinc-500 font-mono">1 km – 1000 km</span>
+          </div>
+
+          <input
+            type="range"
+            min="1"
+            max="1000"
+            step="1"
+            value={distanceRangeKm}
+            onChange={(e) => {
+              setDistanceRangeKm(Number(e.target.value));
+              if (!isDistanceFilterActive) {
+                setIsDistanceFilterActive(true);
+              }
+            }}
+            className="w-full h-1.5 bg-zinc-800 rounded-lg appearance-none cursor-pointer accent-[#ff4d8d]"
+          />
+
+          <div className="flex justify-between text-[10px] text-zinc-500 font-mono">
+            <span>1 km</span>
+            <span>200 km (Default)</span>
+            <span>500 km</span>
+            <span>1000 km</span>
+          </div>
+        </div>
       </div>
 
       {/* Language & Tag Filter Pills */}
@@ -434,11 +574,14 @@ export const DiscoveryFeed: React.FC<DiscoveryFeedProps> = ({
 
       {/* Listeners Count Header */}
       <div className="flex items-center justify-between text-xs text-zinc-400 px-1">
-        <span>
-          Showing <strong className="text-white">{filteredListeners.length}</strong> {filteredListeners.length === 1 ? 'listener' : 'listeners'}
+        <span className="flex items-center gap-1.5 flex-wrap">
+          <span>Showing <strong className="text-white">{filteredListeners.length}</strong> {filteredListeners.length === 1 ? 'listener' : 'listeners'}</span>
+          {isDistanceFilterActive && (
+            <span className="text-zinc-400 text-[11px]">• within <strong className="text-[#ff4d8d]">{distanceRangeKm} km</strong> of {selectedUserCity}</span>
+          )}
         </span>
         {filterOnlineOnly && (
-          <span className="text-emerald-400 font-medium flex items-center gap-1">
+          <span className="text-emerald-400 font-medium flex items-center gap-1 shrink-0">
             <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
             Live free now
           </span>
@@ -459,14 +602,16 @@ export const DiscoveryFeed: React.FC<DiscoveryFeedProps> = ({
           <p className="text-xs text-zinc-400 mt-1 max-w-xs mx-auto">
             Try adjusting your search query, clearing filters, or checking back soon.
           </p>
-          {(searchQuery || selectedTag || filterOnlineOnly) && (
+          {(searchQuery || selectedTag || filterOnlineOnly || isDistanceFilterActive) && (
             <button
               onClick={() => {
                 setSearchQuery('');
                 setSelectedTag(null);
                 setFilterOnlineOnly(false);
+                setIsDistanceFilterActive(false);
+                setDistanceRangeKm(200);
               }}
-              className="mt-4 px-4 py-2 rounded-xl bg-zinc-800 text-xs font-semibold text-white hover:bg-zinc-700 transition"
+              className="mt-4 px-4 py-2 rounded-xl bg-zinc-800 text-xs font-semibold text-white hover:bg-zinc-700 transition cursor-pointer"
             >
               Clear Filters
             </button>
@@ -478,6 +623,7 @@ export const DiscoveryFeed: React.FC<DiscoveryFeedProps> = ({
             <DiscoveryCard
               key={user.uid}
               user={user}
+              distanceKm={getListenerDistance(user)}
               isFavorited={favoriteUserIds.includes(user.uid)}
               onToggleFavorite={handleToggleFavorite}
               onVoiceCall={onVoiceCall}

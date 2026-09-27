@@ -7,6 +7,7 @@ import { isListenerOffline, getListenerPresence } from '../utils/presence';
 interface DiscoveryCardProps {
   user: UserProfile;
   isFavorited: boolean;
+  distanceKm?: number;
   onToggleFavorite: (targetUserId: string) => void;
   onVoiceCall: (user: UserProfile) => void;
   onVideoCall: (user: UserProfile) => void;
@@ -18,6 +19,7 @@ interface DiscoveryCardProps {
 export const DiscoveryCard: React.FC<DiscoveryCardProps> = ({
   user,
   isFavorited,
+  distanceKm,
   onToggleFavorite,
   onVoiceCall,
   onVideoCall,
@@ -103,12 +105,16 @@ export const DiscoveryCard: React.FC<DiscoveryCardProps> = ({
     }, 2200);
   };
 
-  // Generate deterministic distance for friendly UI (e.g. 1.2 to 4.8 km)
-  const distanceKm = useMemo(() => {
+  // Real or calculated distance for UI badge
+  const displayDistance = useMemo(() => {
+    if (distanceKm != null && !isNaN(distanceKm)) {
+      return distanceKm;
+    }
     const hash = (user.uid || '').split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
-    return (1.2 + (hash % 35) / 10).toFixed(1);
-  }, [user.uid]);
+    return Math.round(15 + (hash % 185));
+  }, [distanceKm, user.uid]);
 
+  const allowVideo = user.allowVideoCalls !== false;
   const audioCoins = user.audio_rate_coins ?? user.voice_rate ?? 20;
   const videoCoins = user.video_rate_coins ?? user.video_rate ?? 50;
 
@@ -179,9 +185,12 @@ export const DiscoveryCard: React.FC<DiscoveryCardProps> = ({
               </div>
 
               {/* Location & distance */}
-              <div className="flex items-center gap-1 text-[11px] text-zinc-400 mt-0.5 truncate">
+              <div className="flex items-center gap-1.5 text-[11px] text-zinc-400 mt-0.5 truncate">
                 <MapPin className="w-3 h-3 text-[#ff4d8d] shrink-0" />
-                <span className="truncate">{user.location || 'Chennai, Tamil Nadu'} • {distanceKm} km away</span>
+                <span className="truncate">{user.city || user.location || 'Chennai, Tamil Nadu'}</span>
+                <span className="inline-flex items-center px-1.5 py-0.2 rounded-md bg-[#252538] text-zinc-300 text-[10px] font-semibold shrink-0">
+                  {displayDistance} km away
+                </span>
               </div>
             </div>
 
@@ -236,24 +245,29 @@ export const DiscoveryCard: React.FC<DiscoveryCardProps> = ({
             )}
           </div>
 
-          {/* Rates: "20 coins/m Audio • 50 coins/m Video" with small gold coin icon, no rupee symbol */}
+          {/* Rates: audio rate, and video rate only if allowed */}
           <div className="flex items-center gap-1.5 text-[11px] text-zinc-400 mt-1 flex-wrap">
             <span className="inline-flex items-center gap-1 font-medium text-zinc-300">
               <Coins className="w-3.5 h-3.5 text-amber-400 fill-amber-400/80 shrink-0" />
               <span className="font-semibold text-white">{audioCoins}</span> coins/m Audio
             </span>
-            <span className="text-zinc-600">•</span>
-            <span className="inline-flex items-center gap-1 font-medium text-zinc-300">
-              <Coins className="w-3.5 h-3.5 text-amber-400 fill-amber-400/80 shrink-0" />
-              <span className="font-semibold text-white">{videoCoins}</span> coins/m Video
-            </span>
+            {allowVideo && (
+              <>
+                <span className="text-zinc-600">•</span>
+                <span className="inline-flex items-center gap-1 font-medium text-zinc-300">
+                  <Coins className="w-3.5 h-3.5 text-amber-400 fill-amber-400/80 shrink-0" />
+                  <span className="font-semibold text-white">{videoCoins}</span> coins/m Video
+                </span>
+              </>
+            )}
           </div>
         </div>
       </div>
 
       {/* Under each profile:
           For busy listeners (in_call = true): single full-width button with "On call, wait time ~ X minutes"
-          For free listeners (online & not in call): normal pink Audio Call / Video Call buttons
+          For audio-only listeners (allowVideoCalls = false): single full-width button for Audio Call (Video Call button completely hidden)
+          For regular listeners: Audio Call + Video Call buttons
       */}
       <div className="pt-1 border-t border-zinc-800/80">
         {isBusy ? (
@@ -264,6 +278,18 @@ export const DiscoveryCard: React.FC<DiscoveryCardProps> = ({
             title="Listener is on a call"
           >
             <span>On call, wait time ~ {waitTimeMinutes} minutes</span>
+          </button>
+        ) : !allowVideo ? (
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              onVoiceCall(user);
+            }}
+            className="w-full py-2.5 px-3 rounded-xl border border-[#ff4d8d] bg-[#ff4d8d]/10 hover:bg-[#ff4d8d]/20 text-[#ff4d8d] active:scale-[0.98] font-bold text-xs flex items-center justify-center gap-2 transition cursor-pointer shadow-sm"
+          >
+            <Phone className="w-3.5 h-3.5" />
+            <span>Audio Call</span>
           </button>
         ) : (
           <div className="grid grid-cols-2 gap-2.5">
